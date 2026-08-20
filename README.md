@@ -15,7 +15,7 @@ php bin/hyperf.php vendor:publish sllhsmile/hyperf-log --id=trace-log-config
 ```json
 {
     "repositories": [
-        {"type": "vcs", "url": "https://github.com/sllhSmile/hy-log.git"}
+        {"type": "vcs", "url": "https://github.com/sllhSmile/hyperf-log.git"}
     ]
 }
 ```
@@ -40,7 +40,7 @@ php bin/hyperf.php vendor:publish sllhsmile/hyperf-log --id=trace-log-config
 ```
 
 `handlers => ['default']` 会复用 `channels.default` 的 `RotatingFileHandler`、formatter 和日志路径，因此四类
-日志会统一写入 `xthk.log`。`enabled` 只控制同名公共包采集器；`dblog.response_enabled` 和
+日志会统一写入 `file.log`。`enabled` 只控制同名公共包采集器；`dblog.response_enabled` 和
 `sdklog.response_enabled` 默认关闭，避免记录大查询结果或大 HTTP 响应。
 
 发布的 `config/autoload/trace_log.php` 管理共享 request-id 和 Guzzle 行为：

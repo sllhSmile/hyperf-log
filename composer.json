@@ -10,7 +10,7 @@
         "redis",
         "database"
     ],
-    "homepage": "https://github.com/sllhSmile/hy-log",
+    "homepage": "https://github.com/sllhSmile/hyperf-log",
     "license": "MIT",
     "authors": [
         {
@@ -18,8 +18,8 @@
         }
     ],
     "support": {
-        "issues": "https://github.com/sllhSmile/hy-log/issues",
-        "source": "https://github.com/sllhSmile/hy-log"
+        "issues": "https://github.com/sllhSmile/hyperf-log/issues",
+        "source": "https://github.com/sllhSmile/hyperf-log"
     },
     "require": {
         "php": ">=8.2",
