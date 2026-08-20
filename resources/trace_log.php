@@ -18,9 +18,9 @@ declare(strict_types=1);
  */
 return [
     // 入站请求与 Guzzle 出站请求共用的 request-id Header 名称。
-    'request_id_header' => 'x-request-id',
+    'request_id_header' => 'x-b3-traceid',
     // request-id 在当前协程上下文中的存储键。
-    'request_id_context_key' => 'request_id',
+    'request_id_context_key' => 'x-b3-traceid',
     // Guzzle 出站请求开始时间 Header 名称，用于计算 SDK 调用耗时。
     'request_start_header' => 'x-request-start-time',
     // HTTP 入站请求开始时间在当前协程上下文中的存储键。

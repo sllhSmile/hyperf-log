@@ -15,7 +15,7 @@ class RequestContextTest extends TestCase
 {
     protected function tearDown(): void
     {
-        Context::destroy('request_id');
+        Context::destroy('x-b3-traceid');
         Context::destroy('request_start_time');
     }
 
@@ -23,11 +23,11 @@ class RequestContextTest extends TestCase
     {
         $config = new Config(['trace_log' => []]);
         $context = new RequestContext(new LogConfig($config));
-        $request = (new Request('GET', '/'))->withHeader('x-request-id', 'upstream-id');
+        $request = (new Request('GET', '/'))->withHeader('x-b3-traceid', 'upstream-id');
 
         $result = $context->initialize($request);
 
-        self::assertSame('upstream-id', $result->getHeaderLine('x-request-id'));
+        self::assertSame('upstream-id', $result->getHeaderLine('x-b3-traceid'));
         self::assertSame('upstream-id', $context->id());
         self::assertNotNull($context->startTime());
     }
@@ -41,8 +41,8 @@ class RequestContextTest extends TestCase
 
         $result = $context->initialize(new Request('GET', '/'));
 
-        self::assertNotSame('', $result->getHeaderLine('x-request-id'));
-        self::assertSame($result->getHeaderLine('x-request-id'), $context->id());
+        self::assertNotSame('', $result->getHeaderLine('x-b3-traceid'));
+        self::assertSame($result->getHeaderLine('x-b3-traceid'), $context->id());
     }
 
     /**
@@ -51,12 +51,12 @@ class RequestContextTest extends TestCase
     public function testItReplacesAnEmptyInboundRequestId(): void
     {
         $context = new RequestContext(new LogConfig(new Config(['trace_log' => []])));
-        $request = (new Request('GET', '/'))->withHeader('x-request-id', '  ');
+        $request = (new Request('GET', '/'))->withHeader('x-b3-traceid', '  ');
 
         $result = $context->initialize($request);
 
-        self::assertNotSame('', $result->getHeaderLine('x-request-id'));
-        self::assertSame($result->getHeaderLine('x-request-id'), $context->id());
+        self::assertNotSame('', $result->getHeaderLine('x-b3-traceid'));
+        self::assertSame($result->getHeaderLine('x-b3-traceid'), $context->id());
     }
 
     /**

@@ -79,7 +79,7 @@ class LogConfig
      */
     public function requestIdHeader(): string
     {
-        return (string) $this->config->get('trace_log.request_id_header', 'x-request-id');
+        return (string) $this->config->get('trace_log.request_id_header', 'x-b3-traceid');
     }
 
     /**
@@ -87,7 +87,7 @@ class LogConfig
      */
     public function requestIdContextKey(): string
     {
-        return (string) $this->config->get('trace_log.request_id_context_key', 'x_request_id');
+        return (string) $this->config->get('trace_log.request_id_context_key', 'x-b3-traceid');
     }
 
     /**
