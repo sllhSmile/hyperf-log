@@ -1,0 +1,66 @@
+{
+    "name": "sllhsmile/hyperf-log",
+    "description": "Structured API, Redis, database and Guzzle logging for Hyperf.",
+    "type": "library",
+    "keywords": [
+        "hyperf",
+        "logging",
+        "trace",
+        "guzzle",
+        "redis",
+        "database"
+    ],
+    "homepage": "https://github.com/sllhSmile/hy-log",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "sllhSmile"
+        }
+    ],
+    "support": {
+        "issues": "https://github.com/sllhSmile/hy-log/issues",
+        "source": "https://github.com/sllhSmile/hy-log"
+    },
+    "require": {
+        "php": ">=8.2",
+        "guzzlehttp/guzzle": "^7.0",
+        "hyperf/command": "^3.2",
+        "hyperf/context": "^3.2",
+        "hyperf/coroutine": "^3.2",
+        "hyperf/database": "^3.2",
+        "hyperf/di": "^3.2",
+        "hyperf/event": "^3.2",
+        "hyperf/guzzle": "^3.2",
+        "hyperf/http-server": "^3.2",
+        "hyperf/logger": "^3.2",
+        "hyperf/redis": "^3.2",
+        "ramsey/uuid": "^4.7"
+    },
+    "autoload": {
+        "psr-4": {
+            "Sllhsmile\\HyperfLog\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Sllhsmile\\HyperfLog\\Tests\\": "tests/"
+        }
+    },
+    "require-dev": {
+        "hyperf/config": "^3.2",
+        "phpunit/phpunit": "^11.0"
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true,
+    "config": {
+        "sort-packages": true
+    },
+    "scripts": {
+        "test": "phpunit -c phpunit.xml --colors=always"
+    },
+    "extra": {
+        "hyperf": {
+            "config": "Sllhsmile\\HyperfLog\\ConfigProvider"
+        }
+    }
+}
