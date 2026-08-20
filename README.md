@@ -1,32 +1,79 @@
-# sllhsmile/hyperf-log
+# Hyperf Log
 
-Hyperf 3 的结构化 API、Redis、数据库和 Guzzle 客户端日志公共包。
+[![PHP](https://img.shields.io/badge/PHP-%3E%3D8.2-777BB4?logo=php&logoColor=white)](https://www.php.net/)
+[![Hyperf](https://img.shields.io/badge/Hyperf-%5E3.2-0E8A16)](https://hyperf.io/)
+[![License](https://img.shields.io/badge/license-MIT-22C55E)](LICENSE)
 
-## 安装与配置
+面向 **Hyperf 3** 的结构化日志与请求链路追踪包。它统一采集 HTTP API、数据库、Redis 和 Guzzle 调用日志，并在同一协程链路中复用 request ID。
+
+## 特性
+
+| 能力 | 说明 |
+| --- | --- |
+| API 日志 | 记录 HTTP 请求与响应生命周期数据。 |
+| 数据库日志 | 记录 SQL、耗时和执行结果摘要。 |
+| Redis 日志 | 记录 Redis 命令及其执行信息。 |
+| Guzzle 日志 | 自动注入链路 Header、默认超时，并记录 SDK 调用。 |
+| 协程链路追踪 | HTTP、CLI 与手动初始化的 RPC/后台协程共享 request ID。 |
+| 按 channel 开关 | 每类采集器可独立启用，避免安装后产生额外日志。 |
+
+## 要求
+
+- PHP `>= 8.2`
+- Hyperf `^3.2`
+
+## 安装
+
+### Packagist
+
+Packagist 注册完成后：
 
 ```bash
 composer require sllhsmile/hyperf-log:^0.1
-php bin/hyperf.php vendor:publish sllhsmile/hyperf-log --id=trace-log-config
 ```
 
-该包要求 PHP `>=8.2` 和 Hyperf `^3.2`。Packagist 注册完成前，可在宿主项目的
-`composer.json` 添加以下 VCS repository 后执行相同安装命令：
+### GitHub 仓库
+
+尚未注册 Packagist 时，在宿主项目的 `composer.json` 中加入：
 
 ```json
 {
     "repositories": [
-        {"type": "vcs", "url": "https://github.com/sllhSmile/hyperf-log.git"}
+        {
+            "type": "vcs",
+            "url": "https://github.com/sllhSmile/hyperf-log.git"
+        }
     ]
 }
 ```
 
-公共包不发布、也不会覆盖 logger 配置。请在宿主项目既有的
-`config/autoload/logger.php` 的 `channels` 中，参考现有 `default`、`xthk` channel 的 handler 和 formatter
-写法，新增以下四个 channel：
+然后安装：
+
+```bash
+composer require sllhsmile/hyperf-log:^0.1
+```
+
+发布链路配置：
+
+```bash
+php bin/hyperf.php vendor:publish sllhsmile/hyperf-log --id=trace-log-config
+```
+
+> Hyperf 会通过 `ConfigProvider` 自动注册本包的 Listener、Aspect 和 HTTP Middleware。
+
+## 快速配置
+
+本包不会覆盖宿主项目的 `config/autoload/logger.php`。在 `logger.channels` 中添加所需 channel；下例复用 `default` 的 handler 与 formatter，因此所有结构化日志均写入同一个 `file.log`：
 
 ```php
-'redislog' => ['enabled' => true, 'handlers' => ['default']],
-'apilog' => ['enabled' => true, 'handlers' => ['default']],
+'redislog' => [
+    'enabled' => true,
+    'handlers' => ['default'],
+],
+'apilog' => [
+    'enabled' => true,
+    'handlers' => ['default'],
+],
 'sdklog' => [
     'enabled' => true,
     'response_enabled' => false,
@@ -39,11 +86,24 @@ php bin/hyperf.php vendor:publish sllhsmile/hyperf-log --id=trace-log-config
 ],
 ```
 
-`handlers => ['default']` 会复用 `channels.default` 的 `RotatingFileHandler`、formatter 和日志路径，因此四类
-日志会统一写入 `file.log`。`enabled` 只控制同名公共包采集器；`dblog.response_enabled` 和
-`sdklog.response_enabled` 默认关闭，避免记录大查询结果或大 HTTP 响应。
+宿主应用可按自身部署方式设置默认文件 handler：
 
-发布的 `config/autoload/trace_log.php` 管理共享 request-id 和 Guzzle 行为：
+```php
+'filename' => env('APP_ENV') === 'local'
+    ? BASE_PATH . '/runtime/logs/file.log'
+    : env('HY_LOG_PATH') . '/file.log',
+```
+
+| Channel | 采集内容 | 默认建议 |
+| --- | --- | --- |
+| `apilog` | HTTP API 请求与响应 | 按需启用 |
+| `dblog` | 数据库查询 | `response_enabled=false` |
+| `redislog` | Redis 命令 | 按需启用 |
+| `sdklog` | Guzzle 请求与响应 | `response_enabled=false` |
+
+## 链路追踪
+
+发布后的 `config/autoload/trace_log.php` 控制 request ID 与 Guzzle 默认行为：
 
 ```php
 return [
@@ -58,51 +118,72 @@ return [
 ];
 ```
 
-## 行为与迁移
+- 有效的上游 `x-b3-traceid` 会原样透传。
+- Header 缺失或为空时，会生成 UUID v7，并写入协程 Context 与后续请求对象。
+- Guzzle 自动带上 request ID 与开始时间；调用方显式传入的 Header、`timeout`、`connect_timeout` 优先。
+- CLI 会通过 `BeforeHandle` 初始化链路。RPC 或其他后台协程请在入口注入 `RequestContext` 并调用 `initializeTrace()`。
 
-公共包安装后，Guzzle Client 始终会获得默认超时、request-id 和请求开始时间 Header。显式传入的
-`timeout`、`connect_timeout`、request-id Header 均优先于公共包默认值。
+## 注意事项
 
-`sdklog.enabled=true` 时记录 Guzzle 成功和异常调用；`apilog`、`redislog`、`dblog` 分别由自己的
-channel 开关控制。至少启用一个采集器时，中间件会保留入站 request-id；缺失或为空时创建 UUID v7，并写入
-协程上下文和入站请求 Header。
+- API 日志依赖 HTTP server 的 `enable_request_lifecycle=true`。
+- 请求/响应 body、Header、SQL bindings 和 Redis 参数可能含敏感信息；生产环境应在 formatter 或 processor 中脱敏。
+- 已有同类 Listener、Middleware 或 Guzzle Aspect 时，请关闭其中一套，避免重复日志和重复 Header 注入。
+- 使用 `handlers => ['default']` 时，四类日志会写入同一文件；如需分文件，请为每个 channel 配置独立 handler。
 
-HTTP 的全局 `LogMiddleware` 会自动初始化 trace，它注册在 `middlewares.http`，覆盖 HTTP server 的所有
-路由。命令行不会经过该中间件，而是通过 `BeforeHandle` 事件自动初始化，因此命令中产生的数据库、Redis、
-SDK 日志也会关联同一个 request-id。RPC 同样不会自动经过 HTTP Middleware；当前项目未安装 RPC 组件。
-未来接入 JSON-RPC/gRPC 后，请在其全局 middleware 的最前面注入
-`Sllhsmile\HyperfLog\Support\RequestContext` 并调用 `initializeTrace()`；其后产生的日志和 Guzzle 调用将
-自动复用同一 request-id。
+## 本地开发
 
-HTTP/RPC 协程环境的日志写入会创建子协程，日志格式化和文件 IO 不阻塞当前业务协程；CLI 通常不在协程中，
-采用同步且吞掉写入异常的兜底方式，保证命令主流程不因日志失败中断。
+推荐将包以独立 Git 仓库放在业务项目同级目录：
 
-本包不会删除或禁用宿主项目已有的 Listener、Middleware、Aspect。若旧实现和本包的同类采集器同时
-启用，日志会重复；请由接入方按需关闭其中一方。API 日志依赖 HTTP server 的
-`enable_request_lifecycle=true`。请求/响应 body、headers、SQL bindings 和 Redis parameters 会原样记录；
-生产环境应通过应用 formatter 或 processor 完成敏感数据脱敏。
+```text
+workspace/
+├── package/Sllhsmile/hyperf-log/  # 本包独立 Git 仓库
+└── php-hyperf/                    # 宿主项目
+```
 
-## 替换已有日志实现
+宿主项目使用 Composer `path` repository 软链接本地包：
 
-当前项目使用本地开发包时，可在根 `composer.json` 配置 `packages/hyperf-log` 的 `path` repository，并执行：
+```json
+{
+    "repositories": [
+        {
+            "type": "path",
+            "url": "../package/Sllhsmile/hyperf-log",
+            "options": {
+                "symlink": true
+            }
+        }
+    ],
+    "require": {
+        "sllhsmile/hyperf-log": "dev-main"
+    }
+}
+```
+
+执行一次更新后，`vendor/sllhsmile/hyperf-log` 会软链接到本地目录；后续修改包代码可立即在宿主项目中调试：
 
 ```bash
 composer update sllhsmile/hyperf-log --with-all-dependencies
-php bin/hyperf.php vendor:publish sllhsmile/hyperf-log --id=trace-log-config
 rm -rf runtime/container
 ```
 
-随后在 `logger.php` 启用四个同级 channel，并在应用的 listeners、middlewares、Guzzle 切面和自定义
-HTTP Client 中注释旧日志注册/注入。保留旧类源码即可，不能让旧采集器和本包同时生效。
+## 测试与发布
 
-## 测试
-
-公共包单元测试：
+在包仓库目录执行：
 
 ```bash
-php vendor/bin/co-phpunit -c packages/hyperf-log/phpunit.xml --colors=always
+composer validate --strict --no-check-publish
+composer test
 ```
 
-本地运行服务后分别发起包含 HTTP、数据库、Redis 和 Guzzle 调用的请求；检查 `api.log`、`database.log`、
-`redis.log`、`sdk.log`。dblog 的 `request.sql` 为完整明文 SQL，包含已展开的绑定参数；同一请求产生的四类
-日志应具有相同 `request_id`，且每种日志仅写入一次。
+发布前确认测试通过后：
+
+```bash
+git add .
+git commit -m "fix: describe the change"
+git tag -a v0.1.x -m "Release v0.1.x"
+git push origin main --tags
+```
+
+## License
+
+MIT. See [LICENSE](LICENSE).
