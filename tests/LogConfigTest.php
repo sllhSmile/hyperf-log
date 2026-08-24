@@ -64,6 +64,17 @@ class LogConfigTest extends TestCase
     }
 
     /**
+     * 未声明公共默认值时，不能覆盖 Guzzle 的内置超时行为。
+     */
+    public function testItLeavesGuzzleTimeoutsUnsetByDefault(): void
+    {
+        $config = new LogConfig(new Config(['trace_log' => ['guzzle' => []]]));
+
+        self::assertNull($config->guzzleTimeout());
+        self::assertNull($config->guzzleConnectTimeout());
+    }
+
+    /**
      * 验证大响应记录默认关闭，并可按各自 logger channel 单独开启。
      */
     public function testItReadsResponseEnabledFromLoggerChannel(): void

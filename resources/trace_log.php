@@ -25,11 +25,9 @@ return [
     'request_start_header' => 'x-request-start-time',
     // HTTP 入站请求开始时间在当前协程上下文中的存储键。
     'request_start_context_key' => 'request_start_time',
-    // Guzzle 客户端的统一行为配置；安装公共包后始终生效。
+    // 可选的 Guzzle 公共默认值。未声明 timeout/connect_timeout 时保留 Guzzle 自身默认行为。
     'guzzle' => [
-        // 单次 HTTP 请求的默认总超时时间，单位：秒。
-        'timeout' => 10,
-        // 建立 TCP 连接的默认超时时间，单位：秒。
-        'connect_timeout' => 10,
+        // 'timeout' => 10,
+        // 'connect_timeout' => 10,
     ],
 ];

@@ -107,19 +107,23 @@ class LogConfig
     }
 
     /**
-     * 获取 Guzzle 请求的默认总超时时间，单位：秒。
+     * 获取 Guzzle 请求的公共默认总超时时间，单位：秒。
+     *
+     * 未显式配置时返回 null，使请求继续使用 Guzzle 自身的默认行为。
      */
-    public function guzzleTimeout(): float
+    public function guzzleTimeout(): ?float
     {
-        return (float) $this->config->get('trace_log.guzzle.timeout', 10);
+        return $this->guzzleOption('timeout');
     }
 
     /**
-     * 获取 Guzzle 建立连接的默认超时时间，单位：秒。
+     * 获取 Guzzle 建立连接的公共默认超时时间，单位：秒。
+     *
+     * 未显式配置时返回 null，使请求继续使用 Guzzle 自身的默认行为。
      */
-    public function guzzleConnectTimeout(): float
+    public function guzzleConnectTimeout(): ?float
     {
-        return (float) $this->config->get('trace_log.guzzle.connect_timeout', 10);
+        return $this->guzzleOption('connect_timeout');
     }
 
     /**
@@ -139,5 +143,21 @@ class LogConfig
     {
         // 所有 channel 都在 channels 下，配置路径不随 LoggerFactory 初始化顺序变化。
         return $this->config->get("logger.channels.{$channel}.{$key}", $default);
+    }
+
+    /**
+     * 仅返回宿主在 trace_log.guzzle 中实际声明的配置，不能用 get() 的默认值替代，
+     * 否则公共包会覆盖 Guzzle 的内置默认超时语义。
+     */
+    private function guzzleOption(string $key): ?float
+    {
+        $path = "trace_log.guzzle.{$key}";
+        if (! $this->config->has($path)) {
+            return null;
+        }
+
+        $value = $this->config->get($path);
+
+        return $value === null ? null : (float) $value;
     }
 }

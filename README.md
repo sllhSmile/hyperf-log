@@ -112,15 +112,16 @@ return [
     'request_start_header' => 'x-request-start-time',
     'request_start_context_key' => 'request_start_time',
     'guzzle' => [
-        'timeout' => 10,
-        'connect_timeout' => 10,
+        // 可选：未声明时使用 Guzzle 默认行为。
+        // 'timeout' => 10,
+        // 'connect_timeout' => 10,
     ],
 ];
 ```
 
 - 有效的上游 `x-b3-traceid` 会原样透传。
 - Header 缺失或为空时，会生成 UUID v7，并写入协程 Context 与后续请求对象。
-- Guzzle 自动带上 request ID 与开始时间；调用方显式传入的 Header、`timeout`、`connect_timeout` 优先。
+- Guzzle 自动带上 request ID 与开始时间；公共包仅为 Hyperf 协程 Handler 回写 Swoole 超时配置，优先级为调用方 `swoole.*`（如有）、调用方顶层 `timeout` / `connect_timeout`、`trace_log.guzzle` 的显式配置、Swoole 默认行为；不会修改普通 cURL Guzzle Handler 使用的顶层超时参数。
 - CLI 会通过 `BeforeHandle` 初始化链路。RPC 或其他后台协程请在入口注入 `RequestContext` 并调用 `initializeTrace()`。
 
 ## 注意事项

@@ -91,8 +91,8 @@ class GuzzleLogAspect extends AbstractAspect
     /**
      * 注入默认超时中间件。
      *
-     * 调用方显式传入 timeout 或 connect_timeout 时优先使用调用方值；缺失时才使用
-     * trace_log.guzzle 中配置的默认值。
+     * 仅回写 Hyperf 协程客户端使用的 swoole 配置。优先级为调用方 Guzzle 参数、
+     * trace_log.guzzle 的显式配置、Swoole 内置默认值。
      *
      * @param mixed $stack Guzzle HandlerStack 实例
      */
@@ -100,16 +100,48 @@ class GuzzleLogAspect extends AbstractAspect
     {
         $middleware = function (callable $handler): callable {
             return function (RequestInterface $request, array $options) use ($handler) {
-                // 保留调用方设置的超时，避免公共包覆盖业务请求的个性化参数。
-                $options['timeout'] = $options['timeout'] ?? $this->config->guzzleTimeout();
-                // 未设置连接超时时使用 trace_log 的统一默认值。
-                $options['connect_timeout'] = $options['connect_timeout'] ?? $this->config->guzzleConnectTimeout();
+                // 顶层 Guzzle 参数有值时优先同步到 CoroutineHandler 最终使用的 Swoole
+                // 配置；顶层未传时再使用公共配置；二者皆无则保持 Swoole 默认行为。
+                $this->applySwooleTimeout($options, 'timeout');
+                $this->applySwooleTimeout($options, 'connect_timeout');
 
                 return $handler($request, $options);
             };
         };
 
         $stack->push($middleware, 'trace_log_timeout');
+    }
+
+    /**
+     * 按调用方 Guzzle 配置、公共包配置、Swoole 默认值的顺序解析超时。
+     *
+     * @param array<string, mixed> $options
+     */
+    private function applySwooleTimeout(array &$options, string $option): void
+    {
+        // 调用方直接设置的 Swoole 配置始终保留，避免覆盖其底层定制。
+        if (isset($options['swoole']) && is_array($options['swoole']) && array_key_exists($option, $options['swoole'])) {
+            return;
+        }
+
+        // 调用方的顶层 Guzzle 参数优先，包括 0 这一有效值。
+        $value = $options[$option] ?? match ($option) {
+            'timeout' => $this->config->guzzleTimeout(),
+            'connect_timeout' => $this->config->guzzleConnectTimeout(),
+        };
+
+        // 调用方和公共包均未设置时，不创建 swoole 配置，交由 Swoole 使用默认值。
+        if ($value === null) {
+            return;
+        }
+
+        if (! isset($options['swoole'])) {
+            $options['swoole'] = [];
+        }
+
+        if (is_array($options['swoole'])) {
+            $options['swoole'][$option] = $value;
+        }
     }
 
     /**
