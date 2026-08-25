@@ -114,4 +114,14 @@ class RequestContextTest extends TestCase
         self::assertNotSame('', $requestId);
         self::assertNotNull($context->startTime());
     }
+
+    public function testItCreatesAnIdWhenReadBeforeInitialization(): void
+    {
+        $context = new RequestContext(new LogConfig(new Config(['trace_log' => []])));
+
+        $requestId = $context->id();
+
+        self::assertNotSame('', $requestId);
+        self::assertSame($requestId, $context->id());
+    }
 }

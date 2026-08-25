@@ -51,11 +51,7 @@ class RequestContext
      */
     public function initializeRequestId(): string
     {
-        // 协程上下文中不存在 就生成新的然后写入
-        $requestId = $this->id() ?? Uuid::uuid7()->toString();
-        Context::set($this->config->requestIdContextKey(), $requestId);
-
-        return $requestId;
+        return $this->id();
     }
 
     /**
@@ -66,23 +62,32 @@ class RequestContext
      */
     public function initializeTrace(?string $requestId = null): string
     {
-        // 不存在就生成
-        $requestId ??= $this->initializeRequestId();
-        // 写入上下文 request-id
-        Context::set($this->config->requestIdContextKey(), $requestId);
-        // 写入上下文 开始时间
-        Context::set($this->config->requestStartContextKey(), microtime(true));
+        $requestId = is_string($requestId) ? trim($requestId) : '';
+        if ($requestId !== '') {
+            Context::set($this->config->requestIdContextKey(), $requestId);
+        } else {
+            $requestId = $this->id();
+        }
+
+        // 同一 trace 的开始时间只能写入一次，避免重复初始化导致 API 耗时失真。
+        if (! is_numeric(Context::get($this->config->requestStartContextKey()))) {
+            Context::set($this->config->requestStartContextKey(), microtime(true));
+        }
 
         return $requestId;
     }
 
     /**
-     * 获取当前协程的 request-id；未初始化时返回 null。
+     * 获取当前协程的 request-id；不存在时生成 UUID v7 并写入 Context。
      */
-    public function id(): ?string
+    public function id(): string
     {
         $id = Context::get($this->config->requestIdContextKey());
-        return is_string($id) && $id !== '' ? $id : null;
+        if (is_string($id) && trim($id) !== '') {
+            return $id;
+        }
+
+        return Context::set($this->config->requestIdContextKey(), Uuid::uuid7()->toString());
     }
 
     /**

@@ -7,6 +7,7 @@ $autoloadCandidates = [
     $packageRoot . '/vendor/autoload.php',
     getcwd() . '/vendor/autoload.php',
     dirname($packageRoot, 2) . '/vendor/autoload.php',
+    dirname($packageRoot, 3) . '/php-hyperf/vendor/autoload.php',
 ];
 
 $autoload = null;

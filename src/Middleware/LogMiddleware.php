@@ -30,15 +30,11 @@ class LogMiddleware implements MiddlewareInterface
 
     public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface
     {
-        // 第 1 步：所有采集器关闭时不创建 UUID、不写入 Context，保持框架原有请求路径。
-        if (! $this->config->anyEnabled()) {
-            return $handler->handle($request);
-        }
-
-        // 第 2 步：初始化 request-id 和开始时间；缺失的 request-id 会回写到不可变请求对象。
+        // 初始化与采集器开关无关，保证普通业务日志、响应和采集器共用同一个 trace。
         $request = $this->requestContext->initialize($request);
+        $response = $handler->handle($request);
 
-        // 第 3 步：将携带 trace Header 的请求传递给后续全局、路由和业务中间件。
-        return $handler->handle($request);
+        // 无论上游是否携带 request-id，响应都回写最终生效的链路标识，便于客户端检索。
+        return $response->withHeader($this->config->requestIdHeader(), $this->requestContext->id());
     }
 }

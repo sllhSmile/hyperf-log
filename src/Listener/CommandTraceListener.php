@@ -45,8 +45,8 @@ class CommandTraceListener implements ListenerInterface
      */
     public function process(object $event): void
     {
-        // 第 1 步：确认当前事件确实来自命令执行前阶段，并跳过所有采集器关闭的情况。
-        if (! $event instanceof BeforeHandle || ! $this->config->anyEnabled()) {
+        // 每个命令均建立 trace，普通业务日志和可选采集器才能使用同一个 request-id。
+        if (! $event instanceof BeforeHandle) {
             return;
         }
 

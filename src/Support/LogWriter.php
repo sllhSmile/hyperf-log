@@ -14,7 +14,11 @@ class LogWriter
      * @param LoggerFactory $factory Hyperf 日志记录器工厂
      * @param LogConfig $config 公共包配置读取器
      */
-    public function __construct(private LoggerFactory $factory, private LogConfig $config)
+    public function __construct(
+        private LoggerFactory $factory,
+        private LogConfig $config,
+        private RequestContext $requestContext,
+    )
     {
     }
 
@@ -28,13 +32,15 @@ class LogWriter
     {
         // 在 HTTP/RPC 协程中将日志写入移到子协程，避免文件 IO 影响当前业务协程。
         if (Coroutine::inCoroutine()) {
-            Coroutine::create(function () use ($type, $context): void {
+            // 子协程默认不继承 Context；先确保 ID 存在，再显式复制 trace 键。
+            $this->requestContext->id();
+            Coroutine::fork(function () use ($type, $context): void {
                 try {
                     $this->write($type, $context);
                 } catch (Throwable) {
                     // 日志写入失败不能影响当前请求；异常由框架协程错误处理机制消费。
                 }
-            });
+            }, [$this->config->requestIdContextKey()]);
 
             return;
         }

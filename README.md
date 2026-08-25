@@ -66,6 +66,16 @@ php bin/hyperf.php vendor:publish sllhsmile/hyperf-log --id=trace-log-config
 本包不会覆盖宿主项目的 `config/autoload/logger.php`。在 `logger.channels` 中添加所需 channel；下例复用 `default` 的 handler 与 formatter，因此所有结构化日志均写入同一个 `file.log`：
 
 ```php
+use Sllhsmile\HyperfLog\Formatter\CustomizeJsonFormatter;
+
+'default' => [
+    'handler' => [
+        // 按宿主项目需要配置 handler。
+    ],
+    'formatter' => [
+        'class' => CustomizeJsonFormatter::class,
+    ],
+],
 'redislog' => [
     'enabled' => true,
     'handlers' => ['default'],
@@ -85,6 +95,11 @@ php bin/hyperf.php vendor:publish sllhsmile/hyperf-log --id=trace-log-config
     'handlers' => ['default'],
 ],
 ```
+
+`CustomizeJsonFormatter` 输出单行 JSON。采集器日志会将 `sdklog`、`dblog` 等记录类型写入
+`message_type`，并将其 context 平铺到顶层；普通日志（没有 context）使用
+`{app_name}_log` 作为 `message_type`，原文保留在 `message`。`datetime`、`message_type`、
+`request_id`、`coroutine_id` 是保留字段，不会被 context 覆盖。
 
 宿主应用可按自身部署方式设置默认文件 handler：
 
@@ -118,6 +133,10 @@ return [
     ],
 ];
 ```
+
+HTTP 请求和 CLI 命令会自动建立 trace：入站 `request_id` 缺失时生成 UUID v7，写入请求、
+协程 Context 和 HTTP 响应 Header；Guzzle 与异步日志子协程会继承同一个 ID。宿主项目可继续
+调用 `getRequestId()`，它会委托给本包的 `RequestContext`。
 
 - 有效的上游 `x-b3-traceid` 会原样透传。
 - Header 缺失或为空时，会生成 UUID v7，并写入协程 Context 与后续请求对象。
