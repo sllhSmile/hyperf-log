@@ -79,8 +79,35 @@ class ApiLogListener implements ListenerInterface
      */
     private function responseBody(\Psr\Http\Message\ResponseInterface $response): mixed
     {
-        $body = (string) $response->getBody();
+        // PSR-7 响应体是一个流对象。直接转换为字符串会从当前指针位置读到 EOF，
+        // 而 RequestHandled 事件发生在响应真正发送之前；如果不恢复指针，
+        // 后续 ResponseEmitter 可能只能读到空内容，客户端就会收到空响应。
+        $stream = $response->getBody();
 
+        // 只有可回绕（seekable）的流才能安全地先读日志、再恢复读取位置。
+        // 不可回绕的流仍按原行为读取，但无法改变其底层流的当前位置。
+        $position = null;
+        if ($stream->isSeekable()) {
+            // 保存调用本方法前的位置，避免破坏调用方已经建立的读取状态。
+            $position = $stream->tell();
+
+            // 日志必须从响应体开头读取，否则如果指针已经移动过，日志会缺少前半段内容。
+            $stream->rewind();
+        }
+
+        try {
+            // 读取完整响应体，供日志记录以及后面的 JSON 解析使用。
+            $body = (string) $stream;
+        } finally {
+            // 无论读取或字符串转换是否抛出异常，都要尝试恢复流位置。
+            // 这样日志监听器发生问题时，也不会额外破坏正常的 HTTP 响应发送流程。
+            if ($stream->isSeekable()) {
+                // 恢复到读取日志前的位置；通常该位置是 0，ResponseEmitter 随后可正常发送正文。
+                $stream->seek($position ?? 0);
+            }
+        }
+
+        // JSON 响应转换为数组，便于日志检索；非 JSON 响应保留原始字符串。
         return json_decode($body, true) ?? $body;
     }
 }
