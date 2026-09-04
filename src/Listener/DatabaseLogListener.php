@@ -49,7 +49,6 @@ class DatabaseLogListener implements ListenerInterface
 
         // 第 3 步：日志上下文沿用项目既有 dblog 的 app_name/request/response/耗时结构。
         $this->writer->info('dblog', [
-            'request_id' => $this->requestContext->id(),
             'app_name' => $this->config->appName(),
             'request' => [
                 'database' => $event->connection->getDatabaseName(),

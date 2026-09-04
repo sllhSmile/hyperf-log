@@ -47,8 +47,7 @@ class ApiLogListener implements ListenerInterface
         $response = $event->response;
 
         $this->writer->info('apilog', [
-            // request_id 关联同一 HTTP 请求内的 API、数据库、Redis 和 SDK 日志。
-            'request_id' => $this->requestContext->id(),
+            // request_id 由 CustomizeJsonFormatter 从 RequestContext 统一写入顶层。
             'server' => $event->server,
             // 与宿主项目日志结构保持一致，便于下游日志平台按应用检索。
             'app_name' => $this->config->appName(),

@@ -40,7 +40,7 @@ class ConfigProvider
                 [
                     'id' => 'trace-log-config',
                     'description' => 'Request tracing and Guzzle configuration for the Hyperf log package.',
-                    'source' => __DIR__ . '/../resources/trace_log.php',
+                    'source' => __DIR__ . '/../publish/trace_log.php',
                     'destination' => \BASE_PATH . '/config/autoload/trace_log.php',
                 ],
             ],

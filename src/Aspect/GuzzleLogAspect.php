@@ -290,7 +290,6 @@ class GuzzleLogAspect extends AbstractAspect
         }
         // 第 4 步：请求、异常和耗时始终记录；响应字段严格受 response_enabled 控制。
         $this->writer->info('sdklog', [
-            'request_id' => $requestId,
             'app_name' => $this->config->appName(),
             'request' => [
                 'method' => $request->getMethod(),

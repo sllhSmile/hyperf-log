@@ -42,7 +42,6 @@ class RedisLogListener implements ListenerInterface
 
         // 原始参数单独记录，formatted_command 便于人工排查；生产环境应由 processor 脱敏。
         $this->writer->info('redislog', [
-            'request_id' => $this->requestContext->id(),
             'app_name' => $this->config->appName(),
             'request' => [
                 'connection' => $event->connectionName,

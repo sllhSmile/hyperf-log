@@ -29,7 +29,7 @@
 Packagist 注册完成后：
 
 ```bash
-composer require sllhsmile/hyperf-log:^0.1
+composer require sllhsmile/hyperf-log:^0.4
 ```
 
 ### GitHub 仓库
@@ -50,7 +50,7 @@ composer require sllhsmile/hyperf-log:^0.1
 然后安装：
 
 ```bash
-composer require sllhsmile/hyperf-log:^0.1
+composer require sllhsmile/hyperf-log:^0.4
 ```
 
 发布链路配置：
@@ -125,7 +125,7 @@ return [
     'request_id_header' => 'x-b3-traceid',
     'request_id_context_key' => 'x-b3-traceid',
     'request_start_header' => 'x-request-start-time',
-    'request_start_context_key' => 'request_start_time',
+    'request_start_context_key' => 'x-request-start-time',
     'guzzle' => [
         // 可选：未声明时使用 Guzzle 默认行为。
         // 'timeout' => 10,
@@ -136,12 +136,16 @@ return [
 
 HTTP 请求和 CLI 命令会自动建立 trace：入站 `request_id` 缺失时生成 UUID v7，写入请求、
 协程 Context 和 HTTP 响应 Header；Guzzle 与异步日志子协程会继承同一个 ID。宿主项目可继续
-调用 `getRequestId()`，它会委托给本包的 `RequestContext`。
+使用自有的 `getRequestId()` Helper，但该全局函数不是本包强制提供的。
 
 - 有效的上游 `x-b3-traceid` 会原样透传。
 - Header 缺失或为空时，会生成 UUID v7，并写入协程 Context 与后续请求对象。
 - Guzzle 自动带上 request ID 与开始时间；公共包仅为 Hyperf 协程 Handler 回写 Swoole 超时配置，优先级为调用方 `swoole.*`（如有）、调用方顶层 `timeout` / `connect_timeout`、`trace_log.guzzle` 的显式配置、Swoole 默认行为；不会修改普通 cURL Guzzle Handler 使用的顶层超时参数。
 - CLI 会通过 `BeforeHandle` 初始化链路。RPC 或其他后台协程请在入口注入 `RequestContext` 并调用 `initializeTrace()`。
+
+获取当前 request-id：在业务类中注入 `Sllhsmile\HyperfLog\Support\RequestContext`，调用
+`$requestContext->id()`；HTTP 请求也可以通过 `$request->getHeaderLine('x-b3-traceid')`
+读取客户端传入的值。未传入 Header 时，请使用 `RequestContext::id()` 获取自动生成的最终值。
 
 ## 注意事项
 
@@ -149,60 +153,6 @@ HTTP 请求和 CLI 命令会自动建立 trace：入站 `request_id` 缺失时�
 - 请求/响应 body、Header、SQL bindings 和 Redis 参数可能含敏感信息；生产环境应在 formatter 或 processor 中脱敏。
 - 已有同类 Listener、Middleware 或 Guzzle Aspect 时，请关闭其中一套，避免重复日志和重复 Header 注入。
 - 使用 `handlers => ['default']` 时，四类日志会写入同一文件；如需分文件，请为每个 channel 配置独立 handler。
-
-## 本地开发
-
-推荐将包以独立 Git 仓库放在业务项目同级目录：
-
-```text
-workspace/
-├── package/Sllhsmile/hyperf-log/  # 本包独立 Git 仓库
-└── php-hyperf/                    # 宿主项目
-```
-
-宿主项目使用 Composer `path` repository 软链接本地包：
-
-```json
-{
-    "repositories": [
-        {
-            "type": "path",
-            "url": "../package/Sllhsmile/hyperf-log",
-            "options": {
-                "symlink": true
-            }
-        }
-    ],
-    "require": {
-        "sllhsmile/hyperf-log": "dev-main"
-    }
-}
-```
-
-执行一次更新后，`vendor/sllhsmile/hyperf-log` 会软链接到本地目录；后续修改包代码可立即在宿主项目中调试：
-
-```bash
-composer update sllhsmile/hyperf-log --with-all-dependencies
-rm -rf runtime/container
-```
-
-## 测试与发布
-
-在包仓库目录执行：
-
-```bash
-composer validate --strict --no-check-publish
-composer test
-```
-
-发布前确认测试通过后：
-
-```bash
-git add .
-git commit -m "fix: describe the change"
-git tag -a v0.1.x -m "Release v0.1.x"
-git push origin main --tags
-```
 
 ## License
 

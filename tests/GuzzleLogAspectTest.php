@@ -25,7 +25,9 @@ class GuzzleLogAspectTest extends TestCase
         $writer = $this->createMock(LogWriter::class);
         $writer->expects(self::once())
             ->method('info')
-            ->with('sdklog', self::arrayHasKey('request'));
+            ->with('sdklog', self::callback(static function (array $context): bool {
+                return array_key_exists('request', $context) && ! array_key_exists('request_id', $context);
+            }));
 
         $config = new LogConfig(new Config([
             'logger' => ['channels' => ['sdklog' => ['enabled' => true]]],
@@ -51,7 +53,9 @@ class GuzzleLogAspectTest extends TestCase
         $writer = $this->createMock(LogWriter::class);
         $writer->expects(self::once())
             ->method('info')
-            ->with('sdklog', self::arrayHasKey('exception'));
+            ->with('sdklog', self::callback(static function (array $context): bool {
+                return array_key_exists('exception', $context) && ! array_key_exists('request_id', $context);
+            }));
 
         $config = new LogConfig(new Config([
             'logger' => ['channels' => ['sdklog' => ['enabled' => true]]],
