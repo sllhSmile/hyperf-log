@@ -6,6 +6,7 @@ namespace Sllhsmile\HyperfLog\Aspect;
 
 use GuzzleHttp\Client;
 use GuzzleHttp\Middleware;
+use GuzzleHttp\Promise\Create;
 use GuzzleHttp\Promise\PromiseInterface;
 use Hyperf\Di\Aop\AbstractAspect;
 use Hyperf\Di\Aop\ProceedingJoinPoint;
@@ -172,35 +173,92 @@ class GuzzleLogAspect extends AbstractAspect
     /**
      * 创建 SDK 请求日志中间件。
      *
-     * Middleware::tap 在请求发出后拿到 Promise；成功和失败回调均记录日志，且失败
-     * 回调会将原始异常继续抛出，保证不改变 Guzzle 原有的异常语义。
+     * 这里不能使用 Middleware::tap 注册旁路回调。CoroutineHandler 返回的可能是已经
+     * settled 的 FulfilledPromise/RejectedPromise，此时 tap 内部调用 then() 得到的新
+     * Promise 如果不返回给上层，Guzzle 的同步 wait() 不会驱动 TaskQueue，日志回调就
+     * 永远不会执行。中间件必须返回完整的 then 链，才能同时兼容协程 Handler、普通
+     * cURL Handler 和异步请求。
      */
     private function logMiddleware(): callable
     {
-        return Middleware::tap(
-            // 请求发送前无需额外处理，开始时间已由 Header 中间件写入。
-            static function (RequestInterface $request): void {
-            },
-            function (RequestInterface $request, array $options, PromiseInterface $promise): void {
+        return function (callable $handler): callable {
+            return function (RequestInterface $request, array $options) use ($handler) {
                 // 优先使用请求 Header 时间，确保日志耗时与实际出站请求一致。
                 $startTime = (float) $request->getHeaderLine($this->config->requestStartHeader());
                 $startTime = $startTime > 0 ? $startTime : microtime(true);
                 $requestId = $request->getHeaderLine($this->config->requestIdHeader()) ?: $this->requestContext->id();
 
-                $promise->then(
-                    function (ResponseInterface $response) use ($request, $startTime, $requestId): ResponseInterface {
-                        $this->writeLog($request, $startTime, $requestId, $response);
+                // Handler 规范上返回 Promise，但 Create::promiseFor 也兼容自定义 Handler
+                // 直接返回 Response 的情况，确保下面始终能返回可等待的 Promise 链。
+                $promise = Create::promiseFor($handler($request, $options));
+
+                return $promise->then(
+                    function (mixed $response) use ($request, $startTime, $requestId): mixed {
+                        try {
+                            if ($response instanceof ResponseInterface) {
+                                $this->writeLog($request, $startTime, $requestId, $response);
+                            }
+                        } catch (Throwable $loggingException) {
+                            // SDK 日志属于旁路能力，日志故障不能让成功的 ES 请求失败。
+                            $this->reportLoggingFailure($loggingException, $request, $requestId);
+                        }
 
                         return $response;
                     },
-                    function (mixed $reason) use ($request, $startTime, $requestId): never {
-                        $this->writeLog($request, $startTime, $requestId, null, $reason);
+                    function (mixed $reason) use ($request, $startTime, $requestId): PromiseInterface {
+                        try {
+                            $this->writeLog($request, $startTime, $requestId, null, $reason);
+                        } catch (Throwable $loggingException) {
+                            // 保留原始网络/ES 异常，不能被日志异常覆盖。
+                            $this->reportLoggingFailure($loggingException, $request, $requestId, $reason);
+                        }
 
-                        throw $reason instanceof Throwable ? $reason : new \RuntimeException((string) $reason);
+                        // 返回原始 reason。
+                        return Create::rejectionFor($reason);
                     },
                 );
-            },
+            };
+        };
+    }
+
+    /**
+     * 报告日志系统自身的异常。
+     *
+     * fallback 诊断需要保留完整请求上下文，便于定位具体 SDK 请求和日志失败原因。
+     * 调用方明确要求不对 headers、body 等字段做脱敏，因此这里按原始值输出。
+     */
+    private function reportLoggingFailure(
+        Throwable $exception,
+        RequestInterface $request,
+        ?string $requestId,
+        mixed $reason = null,
+    ): void
+    {
+        $context = [
+            'request_id' => $requestId,
+            'request' => [
+                'method' => $request->getMethod(),
+                'url' => (string) $request->getUri(),
+                'headers' => $request->getHeaders(),
+                'options' => (string) $request->getBody(),
+            ],
+            'reason' => $reason instanceof Throwable ? [
+                'class' => $reason::class,
+                'message' => $reason->getMessage(),
+                'code' => $reason->getCode(),
+            ] : $reason,
+        ];
+        $encodedContext = json_encode(
+            $context,
+            JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PARTIAL_OUTPUT_ON_ERROR,
         );
+
+        error_log(sprintf(
+            'hyperf-log sdklog write failed: %s: %s context=%s',
+            $exception::class,
+            $exception->getMessage(),
+            $encodedContext === false ? var_export($context, true) : $encodedContext,
+        ));
     }
 
     /**
@@ -224,14 +282,12 @@ class GuzzleLogAspect extends AbstractAspect
         // 第 1 步：记录日志时的时间即为请求结束时间。
         $endTime = microtime(true);
         $responseBody = null;
-
         // 第 2 步：响应体可能很大；未开启 sdklog.response_enabled 时完全不读取流。
         if ($response !== null && $this->config->responseEnabled('sdklog')) {
             // 第 3 步：将流读取为字符串会移动指针，读取后必须复位供业务继续消费。
             $responseBody = (string) $response->getBody();
             $response->getBody()->rewind();
         }
-
         // 第 4 步：请求、异常和耗时始终记录；响应字段严格受 response_enabled 控制。
         $this->writer->info('sdklog', [
             'request_id' => $requestId,

@@ -33,7 +33,7 @@ class ConfigProvider
             ],
             'middlewares' => [
                 'http' => [
-                    LogMiddleware::class => 99999,
+                    LogMiddleware::class => PHP_INT_MAX,
                 ],
             ],
             'publish' => [

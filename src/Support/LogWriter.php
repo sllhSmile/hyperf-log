@@ -37,8 +37,10 @@ class LogWriter
             Coroutine::fork(function () use ($type, $context): void {
                 try {
                     $this->write($type, $context);
-                } catch (Throwable) {
-                    // 日志写入失败不能影响当前请求；异常由框架协程错误处理机制消费。
+                } catch (Throwable $exception) {
+                    // 日志写入失败不能影响当前请求；仅输出异常类型作为诊断兜底，
+                    // 不复制上下文，避免把 Authorization 或请求 body 写入 stderr。
+                    $this->reportFailure($type, $exception);
                 }
             }, [$this->config->requestIdContextKey()]);
 
@@ -48,8 +50,9 @@ class LogWriter
         // CLI 通常不运行在协程中，采用同步兜底以保证命令结束前日志已经落盘。
         try {
             $this->write($type, $context);
-        } catch (Throwable) {
+        } catch (Throwable $exception) {
             // 日志系统故障不能中断命令业务；同步路径同样保持“记录失败不影响主流程”。
+            $this->reportFailure($type, $exception);
         }
     }
 
@@ -65,5 +68,17 @@ class LogWriter
         $channel = $this->config->channel($type);
         // Logger 名称与 channel 均采用采集器名称，便于 formatter 和日志平台过滤。
         $this->factory->get($channel, $channel)->info($type, $context);
+    }
+
+    /**
+     * 输出不含请求上下文的最小失败诊断，避免日志故障再次静默。
+     */
+    private function reportFailure(string $type, Throwable $exception): void
+    {
+        error_log(sprintf(
+            'hyperf-log %s write failed: %s',
+            $type,
+            $exception::class,
+        ));
     }
 }
