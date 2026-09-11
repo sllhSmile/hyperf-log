@@ -9,7 +9,9 @@ use GuzzleHttp\Promise\Create;
 use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use Hyperf\Config\Config;
+use Hyperf\Context\Context;
 use PHPUnit\Framework\TestCase;
+use Psr\Http\Message\RequestInterface;
 use Sllhsmile\HyperfLog\Aspect\GuzzleLogAspect;
 use Sllhsmile\HyperfLog\Support\LogConfig;
 use Sllhsmile\HyperfLog\Support\LogWriter;
@@ -95,6 +97,60 @@ class GuzzleLogAspectTest extends TestCase
         $response = $stack(new Request('GET', 'https://example.com'), [])->wait();
 
         self::assertSame(200, $response->getStatusCode());
+    }
+
+    /**
+     * 调用方即使设置其他 request-id，出站请求和 fallback 日志也必须沿用当前 trace。
+     */
+    public function testOutboundRequestAndFallbackUseCurrentTraceId(): void
+    {
+        $writer = $this->createMock(LogWriter::class);
+        $writer->method('info')->willThrowException(new \RuntimeException('logger unavailable'));
+
+        $config = new LogConfig(new Config([
+            'logger' => ['channels' => ['sdklog' => ['enabled' => true]]],
+            'trace_log' => ['guzzle' => []],
+        ]));
+        $requestContext = new RequestContext($config);
+        $requestContext->initializeTrace('context-123');
+        $aspect = new GuzzleLogAspect($config, $writer, $requestContext);
+        $method = new \ReflectionMethod($aspect, 'logMiddleware');
+        $middleware = $method->invoke($aspect);
+
+        $outboundRequest = null;
+        $stack = new HandlerStack(static function (RequestInterface $request) use (&$outboundRequest) {
+            $outboundRequest = $request;
+
+            return Create::promiseFor(new Response(200));
+        });
+        $headerMethod = new \ReflectionMethod($aspect, 'pushRequestHeaderMiddleware');
+        $headerMethod->invoke($aspect, $stack);
+        $stack->push($middleware, 'trace_log_sdk');
+
+        $errorLog = tempnam(sys_get_temp_dir(), 'hyperf-log-test-');
+        self::assertNotFalse($errorLog);
+        $previousErrorLog = ini_set('error_log', $errorLog);
+
+        try {
+            $stack(new Request('GET', 'https://example.com?token=query-secret', [
+                'x-b3-traceid' => 'custom-456',
+                'Authorization' => 'Bearer private-token',
+            ], 'password=plain-secret'), [])->wait();
+
+            self::assertInstanceOf(RequestInterface::class, $outboundRequest);
+            self::assertSame('context-123', $outboundRequest->getHeaderLine('x-b3-traceid'));
+            $fallbackLog = file_get_contents($errorLog);
+            self::assertNotFalse($fallbackLog);
+            self::assertStringContainsString('"request_id":"context-123"', $fallbackLog);
+            self::assertStringNotContainsString('"request_id":"custom-456"', $fallbackLog);
+            self::assertStringNotContainsString('private-token', $fallbackLog);
+            self::assertStringNotContainsString('plain-secret', $fallbackLog);
+            self::assertStringNotContainsString('query-secret', $fallbackLog);
+        } finally {
+            ini_set('error_log', $previousErrorLog === false ? '' : $previousErrorLog);
+            Context::destroy('x-b3-traceid');
+            unlink($errorLog);
+        }
     }
 
     /**

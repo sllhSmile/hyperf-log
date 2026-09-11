@@ -15,6 +15,28 @@ use Hyperf\Contract\ConfigInterface;
 class LogConfig
 {
     /**
+     * 默认需要按字段名遮蔽的敏感数据。
+     *
+     * @var string[]
+     */
+    private const DEFAULT_SENSITIVE_FIELDS = [
+        'authorization',
+        'proxy-authorization',
+        'cookie',
+        'set-cookie',
+        'x-api-key',
+        'password',
+        'passwd',
+        'token',
+        'access_token',
+        'refresh_token',
+        'api_key',
+        'api-key',
+        'secret',
+        'client_secret',
+    ];
+
+    /**
      * 支持的日志采集器及对应的 logger channel 名称。
      *
      * @var string[]
@@ -132,6 +154,58 @@ class LogConfig
     public function appName(): string
     {
         return (string) $this->config->get('app_name', $this->config->get('app_env', ''));
+    }
+
+    /**
+     * 返回 Header、Query、JSON 和表单共用的敏感字段名单。
+     *
+     * @return string[]
+     */
+    public function payloadSensitiveFields(): array
+    {
+        $fields = $this->config->get('trace_log.payload.sensitive_fields', self::DEFAULT_SENSITIVE_FIELDS);
+        if (! is_array($fields)) {
+            throw new \InvalidArgumentException('trace_log.payload.sensitive_fields must be an array.');
+        }
+
+        $normalized = [];
+        foreach ($fields as $field) {
+            if (! is_string($field) || trim($field) === '') {
+                throw new \InvalidArgumentException('trace_log.payload.sensitive_fields must contain non-empty strings.');
+            }
+            $normalized[] = strtolower(trim($field));
+        }
+
+        return array_values(array_unique($normalized));
+    }
+
+    /**
+     * 返回敏感字段写入日志时使用的替换内容。
+     */
+    public function payloadRedactionValue(): string
+    {
+        $replacement = $this->config->get('trace_log.payload.redaction_value', '****');
+        if (! is_string($replacement)) {
+            throw new \InvalidArgumentException('trace_log.payload.redaction_value must be a string.');
+        }
+
+        return $replacement;
+    }
+
+    /**
+     * 返回单个日志负载允许的最大字节数；null 表示不限制。
+     */
+    public function payloadMaxBytes(): ?int
+    {
+        $maxBytes = $this->config->get('trace_log.payload.max_bytes', 64 * 1024);
+        if ($maxBytes === null) {
+            return null;
+        }
+        if (! is_int($maxBytes) || $maxBytes <= 0) {
+            throw new \InvalidArgumentException('trace_log.payload.max_bytes must be a positive integer or null.');
+        }
+
+        return $maxBytes;
     }
 
     /**

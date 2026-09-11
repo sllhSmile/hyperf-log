@@ -148,8 +148,8 @@ class GuzzleLogAspect extends AbstractAspect
     /**
      * 注入出站请求 Header 中间件。
      *
-     * 每次请求发送前补充 request-id 与微秒级开始时间。调用方已有的 request-id
-     * 不会被覆盖，便于跨服务链路传递上游追踪标识。
+     * 每次请求发送前写入 request-id 与微秒级开始时间。request-id 统一取自当前
+     * RequestContext，确保同一条链路内所有出站请求使用相同标识。
      *
      * @param mixed $stack Guzzle HandlerStack 实例
      */
@@ -159,12 +159,11 @@ class GuzzleLogAspect extends AbstractAspect
             // 请求开始时间总是由当前出站调用生成，用于精确计算 SDK 调用耗时。
             $request = $request->withHeader($this->config->requestStartHeader(), (string) microtime(true));
 
-            $requestIdHeader = $this->config->requestIdHeader();
-            if (! $request->hasHeader($requestIdHeader)) {
-                // 非 HTTP 协程中 id() 可能为空，此时生成 UUID 并保存到当前协程上下文。
-                $requestId = $this->requestContext->id() ?? $this->requestContext->initializeRequestId();
-                $request = $request->withHeader($requestIdHeader, $requestId);
-            }
+            // 即使调用方传入其他值，也以当前 trace 为准，避免同一请求产生多套链路 ID。
+            $request = $request->withHeader(
+                $this->config->requestIdHeader(),
+                $this->requestContext->id(),
+            );
 
             return $request;
         }), 'trace_log_request_headers');
@@ -186,7 +185,9 @@ class GuzzleLogAspect extends AbstractAspect
                 // 优先使用请求 Header 时间，确保日志耗时与实际出站请求一致。
                 $startTime = (float) $request->getHeaderLine($this->config->requestStartHeader());
                 $startTime = $startTime > 0 ? $startTime : microtime(true);
-                $requestId = $request->getHeaderLine($this->config->requestIdHeader()) ?: $this->requestContext->id();
+                // fallback 使用 error_log()，不会经过 formatter；在 Handler 执行前捕获
+                // 当前 trace ID，避免异步回调阶段再次读取协程 Context。
+                $requestId = $this->requestContext->id();
 
                 // Handler 规范上返回 Promise，但 Create::promiseFor 也兼容自定义 Handler
                 // 直接返回 Response 的情况，确保下面始终能返回可等待的 Promise 链。
@@ -196,7 +197,7 @@ class GuzzleLogAspect extends AbstractAspect
                     function (mixed $response) use ($request, $startTime, $requestId): mixed {
                         try {
                             if ($response instanceof ResponseInterface) {
-                                $this->writeLog($request, $startTime, $requestId, $response);
+                                $this->writeLog($request, $startTime, $response);
                             }
                         } catch (Throwable $loggingException) {
                             // SDK 日志属于旁路能力，日志故障不能让成功的 ES 请求失败。
@@ -207,7 +208,7 @@ class GuzzleLogAspect extends AbstractAspect
                     },
                     function (mixed $reason) use ($request, $startTime, $requestId): PromiseInterface {
                         try {
-                            $this->writeLog($request, $startTime, $requestId, null, $reason);
+                            $this->writeLog($request, $startTime, null, $reason);
                         } catch (Throwable $loggingException) {
                             // 保留原始网络/ES 异常，不能被日志异常覆盖。
                             $this->reportLoggingFailure($loggingException, $request, $requestId, $reason);
@@ -224,27 +225,25 @@ class GuzzleLogAspect extends AbstractAspect
     /**
      * 报告日志系统自身的异常。
      *
-     * fallback 诊断需要保留完整请求上下文，便于定位具体 SDK 请求和日志失败原因。
-     * 调用方明确要求不对 headers、body 等字段做脱敏，因此这里按原始值输出。
+     * error_log() 不经过 PayloadProcessor 和 Formatter，因此只保留定位故障必需的
+     * request-id、请求方法、无查询参数 URL 与异常摘要，禁止回退输出 Header 和 Body。
      */
     private function reportLoggingFailure(
         Throwable $exception,
         RequestInterface $request,
-        ?string $requestId,
+        string $requestId,
         mixed $reason = null,
     ): void
     {
         $context = [
             'request_id' => $requestId,
+            'type' => 'sdklog',
             'request' => [
                 'method' => $request->getMethod(),
-                'url' => (string) $request->getUri(),
-                'headers' => $request->getHeaders(),
-                'options' => (string) $request->getBody(),
+                'url' => (string) $request->getUri()->withQuery('')->withFragment(''),
             ],
             'reason' => $reason instanceof Throwable ? [
                 'class' => $reason::class,
-                'message' => $reason->getMessage(),
                 'code' => $reason->getCode(),
             ] : $reason,
         ];
@@ -268,14 +267,12 @@ class GuzzleLogAspect extends AbstractAspect
      *
      * @param RequestInterface $request 当前出站请求对象
      * @param float $startTime 请求开始时间戳
-     * @param string|null $requestId 本次请求的链路标识
      * @param ResponseInterface|null $response 成功响应；异常时为 null
      * @param mixed $reason Guzzle 失败原因或异常对象
      */
     private function writeLog(
         RequestInterface $request,
         float $startTime,
-        ?string $requestId,
         ?ResponseInterface $response,
         mixed $reason = null,
     ): void {

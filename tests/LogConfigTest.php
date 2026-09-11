@@ -74,6 +74,23 @@ class LogConfigTest extends TestCase
         self::assertNull($config->guzzleConnectTimeout());
     }
 
+    public function testItReadsPayloadProtectionDefaultsAndOverrides(): void
+    {
+        $defaults = new LogConfig(new Config([]));
+        self::assertContains('password', $defaults->payloadSensitiveFields());
+        self::assertSame('****', $defaults->payloadRedactionValue());
+        self::assertSame(64 * 1024, $defaults->payloadMaxBytes());
+
+        $configured = new LogConfig(new Config(['trace_log' => ['payload' => [
+            'sensitive_fields' => ['PIN', 'pin'],
+            'redaction_value' => '[hidden]',
+            'max_bytes' => null,
+        ]]]));
+        self::assertSame(['pin'], $configured->payloadSensitiveFields());
+        self::assertSame('[hidden]', $configured->payloadRedactionValue());
+        self::assertNull($configured->payloadMaxBytes());
+    }
+
     /**
      * 验证大响应记录默认关闭，并可按各自 logger channel 单独开启。
      */

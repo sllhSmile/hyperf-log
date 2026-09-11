@@ -24,10 +24,34 @@ return [
     // Guzzle 出站请求开始时间 Header 名称，用于计算 SDK 调用耗时。
     'request_start_header' => 'x-request-start-time',
     // HTTP 入站请求开始时间在当前协程上下文中的存储键。
-    'request_start_context_key' => 'request_start_time',
+    'request_start_context_key' => 'x-request-start-time',
     // 可选的 Guzzle 公共默认值。未声明 timeout/connect_timeout 时保留 Guzzle 自身默认行为。
     'guzzle' => [
         // 'timeout' => 10,
         // 'connect_timeout' => 10,
+    ],
+    // API、Guzzle 和 Redis 日志的内容保护；dblog 暂不参与脱敏和截断。
+    'payload' => [
+        // 按 Header、Query、JSON 和表单字段名匹配；空数组表示关闭通用字段脱敏。
+        'sensitive_fields' => [
+            'authorization',
+            'proxy-authorization',
+            'cookie',
+            'set-cookie',
+            'x-api-key',
+            'password',
+            'passwd',
+            'token',
+            'access_token',
+            'refresh_token',
+            'api_key',
+            'api-key',
+            'secret',
+            'client_secret',
+        ],
+        // 敏感字段被替换后的日志内容。
+        'redaction_value' => '****',
+        // 单个请求体、响应体、参数或结果最大记录 64 KB；null 表示不截断。
+        'max_bytes' => 64 * 1024,
     ],
 ];

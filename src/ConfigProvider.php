@@ -5,11 +5,15 @@ declare(strict_types=1);
 namespace Sllhsmile\HyperfLog;
 
 use Sllhsmile\HyperfLog\Aspect\GuzzleLogAspect;
+use Sllhsmile\HyperfLog\Contract\PayloadProcessorInterface;
+use Sllhsmile\HyperfLog\Factory\LogWriterFactory;
 use Sllhsmile\HyperfLog\Listener\ApiLogListener;
 use Sllhsmile\HyperfLog\Listener\CommandTraceListener;
 use Sllhsmile\HyperfLog\Listener\DatabaseLogListener;
 use Sllhsmile\HyperfLog\Listener\RedisLogListener;
 use Sllhsmile\HyperfLog\Middleware\LogMiddleware;
+use Sllhsmile\HyperfLog\Support\LogWriter;
+use Sllhsmile\HyperfLog\Support\PayloadProcessor;
 
 class ConfigProvider
 {
@@ -22,6 +26,10 @@ class ConfigProvider
     public function __invoke(): array
     {
         return [
+            'dependencies' => [
+                PayloadProcessorInterface::class => PayloadProcessor::class,
+                LogWriter::class => LogWriterFactory::class,
+            ],
             'listeners' => [
                 ApiLogListener::class,
                 CommandTraceListener::class,
