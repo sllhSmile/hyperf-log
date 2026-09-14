@@ -19,11 +19,11 @@ use Sllhsmile\HyperfLog\Support\RequestContext;
 class CommandTraceListener implements ListenerInterface
 {
     /**
-     * @param LogConfig $config 用于判断是否存在已启用的日志采集器
+     * @param LogConfig $config 保留既有构造签名，避免升级时破坏手工实例化代码
      * @param RequestContext $requestContext 用于建立当前命令的追踪上下文
-     */
+    */
     public function __construct(
-        private readonly LogConfig $config,
+        protected readonly LogConfig $config,
         private readonly RequestContext $requestContext,
     ) {
     }

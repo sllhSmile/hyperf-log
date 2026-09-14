@@ -13,8 +13,8 @@ declare(strict_types=1);
  * json-rpc、grpc 等实现不同而不同，请在具体 RPC middleware 的最前面调用
  * RequestContext::initializeTrace()；该方法不依赖 HTTP 请求对象。
  *
- * dblog.response_enabled 和 sdklog.response_enabled 位于宿主 logger.php 的同名
- * channel 内，默认建议 false；开启后分别记录数据库 result 和 SDK 响应体。
+ * dblog.response_enabled、redislog.response_enabled 和 sdklog.response_enabled 位于
+ * 宿主 logger.php 的同名 channel 内，默认建议 false；开启后分别记录对应执行结果或响应体。
  */
 return [
     // 入站请求与 Guzzle 出站请求共用的 request-id Header 名称。
@@ -30,9 +30,9 @@ return [
         // 'timeout' => 10,
         // 'connect_timeout' => 10,
     ],
-    // API、Guzzle 和 Redis 日志的内容保护；dblog 暂不参与脱敏和截断。
+    // API/Guzzle 按字段脱敏，Redis AUTH 强制遮蔽；四类采集器均执行容量限制。
     'payload' => [
-        // 按 Header、Query、JSON 和表单字段名匹配；空数组表示关闭通用字段脱敏。
+        // 按 Header、Query、JSON 和已解析表单字段名匹配；空数组表示关闭通用字段脱敏。
         'sensitive_fields' => [
             'authorization',
             'proxy-authorization',
@@ -51,7 +51,7 @@ return [
         ],
         // 敏感字段被替换后的日志内容。
         'redaction_value' => '****',
-        // 单个请求体、响应体、参数或结果最大记录 64 KB；null 表示不截断。
+        // 单个请求体、响应体、完整 Redis 命令或结果最大记录 64 KB；null 表示不截断。
         'max_bytes' => 64 * 1024,
     ],
 ];

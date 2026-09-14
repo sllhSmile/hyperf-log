@@ -22,6 +22,8 @@ class ConfigProvider
      *
      * 采集器是否真正记录日志由各 logger channel 的 enabled 字段控制，注册本身
      * 不会改变宿主项目已有的日志 Listener、Middleware 或 Aspect。
+     *
+     * @return array<string, mixed>
      */
     public function __invoke(): array
     {

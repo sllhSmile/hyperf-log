@@ -14,12 +14,12 @@ use Sllhsmile\HyperfLog\Support\RequestContext;
 class DatabaseLogListener implements ListenerInterface
 {
     /**
-     * 注入数据库日志所需配置、写入器和请求上下文。
+     * 注入数据库日志依赖；RequestContext 参数保留既有公开构造签名。
      */
     public function __construct(
         private LogConfig $config,
         private LogWriter $writer,
-        private RequestContext $requestContext,
+        protected RequestContext $requestContext,
     ) {
     }
 
@@ -45,7 +45,7 @@ class DatabaseLogListener implements ListenerInterface
         $sql = $this->interpolateSql($event->sql, $event->bindings, $event->connection);
 
         // 第 2 步：查询结果可能很大，只有明确开启 dblog.response_enabled 才保留。
-        $response = $this->config->responseEnabled('dblog') ? $event->result : null;
+        $response = $this->config->responseEnabled('dblog') ? ['body' => $event->result] : null;
 
         // 第 3 步：日志上下文沿用项目既有 dblog 的 app_name/request/response/耗时结构。
         $this->writer->info('dblog', [
@@ -58,8 +58,8 @@ class DatabaseLogListener implements ListenerInterface
             'response' => $response,
             'start_time' => null,
             'end_time' => null,
-            // QueryExecuted::$time 单位为毫秒，与原 dblog 的 run_time 字段保持一致。
-            'run_time' => $event->time,
+            // QueryExecuted::$time 已经以毫秒为单位，保留数值便于日志平台聚合。
+            'duration_ms' => $event->time,
         ]);
     }
 

@@ -88,11 +88,11 @@ class LogConfig
     /**
      * 判断指定采集器是否应记录响应数据。
      *
-     * dblog 的 result 和 sdklog 的响应体可能很大，因此默认 false。
+     * dblog、redislog 的 result 和 sdklog 的响应体可能很大，因此默认 false。
      */
     public function responseEnabled(string $channel): bool
     {
-        // 从 channel 自身读取开关，确保 dblog 和 sdklog 的大响应可独立控制。
+        // 从 channel 自身读取开关，确保各采集器的大响应可独立控制。
         return (bool) $this->channelConfig($channel, 'response_enabled', false);
     }
 

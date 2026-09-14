@@ -22,15 +22,17 @@ class PayloadProcessorTest extends TestCase
                     'Authorization' => ['Bearer secret'],
                     'Content-Type' => ['application/json'],
                 ],
-                'options' => json_encode([
+                'body' => json_encode([
                     'name' => 'smile',
                     'password' => '123456',
                     'profile' => ['access_token' => 'token-value'],
                 ], JSON_THROW_ON_ERROR),
             ],
             'response' => [
-                'id' => 1,
-                'token' => 'response-token',
+                'body' => json_encode([
+                    'id' => 1,
+                    'token' => 'response-token',
+                ], JSON_THROW_ON_ERROR),
             ],
         ]);
 
@@ -44,8 +46,11 @@ class PayloadProcessorTest extends TestCase
             'name' => 'smile',
             'password' => '****',
             'profile' => ['access_token' => '****'],
-        ], json_decode($result['request']['options'], true, flags: JSON_THROW_ON_ERROR));
-        self::assertSame(['id' => 1, 'token' => '****'], $result['response']);
+        ], $result['request']['body']);
+        self::assertSame(
+            ['id' => 1, 'token' => '****'],
+            $result['response']['body'],
+        );
         self::assertArrayNotHasKey('payload_truncation', $result);
     }
 
@@ -61,7 +66,7 @@ class PayloadProcessorTest extends TestCase
             'request' => [
                 'url' => 'https://example.com?pin=1234&token=kept',
                 'headers' => [],
-                'options' => '{"pin":"1234","password":"kept"}',
+                'body' => '{"pin":"1234","password":"kept"}',
             ],
             'response' => null,
         ]);
@@ -69,8 +74,55 @@ class PayloadProcessorTest extends TestCase
         self::assertSame('https://example.com?pin=%5Bhidden%5D&token=kept', $result['request']['url']);
         self::assertSame(
             ['pin' => '[hidden]', 'password' => 'kept'],
-            json_decode($result['request']['options'], true, flags: JSON_THROW_ON_ERROR),
+            $result['request']['body'],
         );
+    }
+
+    public function testItPreservesJsonStructureWhenRedactionIsDisabled(): void
+    {
+        $processor = $this->processor([
+            'sensitive_fields' => [],
+            'redaction_value' => '****',
+            'max_bytes' => null,
+        ]);
+
+        $result = $processor->process('apilog', [
+            'request' => [
+                'headers' => ['Content-Type' => ['application/json']],
+                'body' => '{"token":"plain-token"}',
+            ],
+            'response' => ['body' => '{"ok":true}'],
+        ]);
+
+        self::assertSame(['token' => 'plain-token'], $result['request']['body']);
+        self::assertSame(['ok' => true], $result['response']['body']);
+    }
+
+    public function testItKeepsPlainTextBodyAsString(): void
+    {
+        $result = $this->processor()->process('apilog', [
+            'request' => [
+                'headers' => ['Content-Type' => ['text/plain']],
+                'body' => '{"looks":"like json"}',
+            ],
+            'response' => [
+                'headers' => ['Content-Type' => ['text/plain']],
+                'body' => '{"also":"json-looking"}',
+            ],
+        ]);
+
+        self::assertSame('{"looks":"like json"}', $result['request']['body']);
+        self::assertSame('{"also":"json-looking"}', $result['response']['body']);
+    }
+
+    public function testItKeepsJsonLookingRedisResultAsString(): void
+    {
+        $result = $this->processor()->process('redislog', [
+            'request' => ['command' => 'GET cached-json'],
+            'response' => ['body' => '{"token":"stored-value"}'],
+        ]);
+
+        self::assertSame('{"token":"stored-value"}', $result['response']['body']);
     }
 
     public function testItRedactsFormEncodedRequestBody(): void
@@ -79,15 +131,41 @@ class PayloadProcessorTest extends TestCase
             'request' => [
                 'url' => 'https://example.com/login',
                 'headers' => ['Content-Type' => ['application/x-www-form-urlencoded; charset=UTF-8']],
-                'options' => 'username=smile&password=123&profile[token]=abc',
+                'body' => 'username=smile&password=123&profile[token]=abc',
             ],
             'response' => null,
         ]);
 
         self::assertSame(
             'username=smile&password=%2A%2A%2A%2A&profile[token]=%2A%2A%2A%2A',
-            $result['request']['options'],
+            $result['request']['body'],
         );
+    }
+
+    public function testItRedactsParsedMultipartFieldsAndKeepsFileMetadata(): void
+    {
+        $result = $this->processor()->process('apilog', [
+            'request' => [
+                'url' => 'https://example.com/profile',
+                'headers' => ['Content-Type' => ['multipart/form-data; boundary=test']],
+                'body' => ['name' => 'smile', 'password' => 'plain-secret'],
+                'files' => [
+                    'avatar' => [
+                        'filename' => 'avatar.jpg',
+                        'media_type' => 'image/jpeg',
+                        'size' => 12,
+                        'error' => UPLOAD_ERR_OK,
+                    ],
+                ],
+            ],
+        ]);
+
+        self::assertSame(
+            ['name' => 'smile', 'password' => '****'],
+            $result['request']['body'],
+        );
+        self::assertSame('avatar.jpg', $result['request']['files']['avatar']['filename']);
+        self::assertSame(12, $result['request']['files']['avatar']['size']);
     }
 
     public function testItTruncatesPayloadsAndAddsMetadata(): void
@@ -100,37 +178,18 @@ class PayloadProcessorTest extends TestCase
 
         $result = $processor->process('redislog', [
             'request' => [
-                'command' => 'GET example',
-                'parameters' => [str_repeat('a', 40)],
+                'command' => 'SET key ' . str_repeat('a', 40),
             ],
-            'response' => str_repeat('中', 20),
+            'response' => ['body' => str_repeat('中', 20)],
         ]);
 
-        self::assertLessThanOrEqual(16, strlen($result['request']['parameters']));
-        self::assertLessThanOrEqual(16, strlen($result['response']));
-        self::assertSame(44, $result['payload_truncation']['request.parameters']['original_bytes']);
-        self::assertSame(60, $result['payload_truncation']['response']['original_bytes']);
+        self::assertLessThanOrEqual(16, strlen($result['request']['command']));
+        self::assertLessThanOrEqual(16, strlen($result['response']['body']));
+        self::assertSame(48, $result['payload_truncation']['request.command']['original_bytes']);
+        self::assertSame(60, $result['payload_truncation']['response.body']['original_bytes']);
     }
 
-    public function testItAlwaysRedactsRedisAuthParameters(): void
-    {
-        $processor = $this->processor([
-            'sensitive_fields' => [],
-            'redaction_value' => '[secret]',
-            'max_bytes' => null,
-        ]);
-
-        $result = $processor->process('redislog', [
-            'request' => [
-                'command' => 'AUTH ***',
-                'parameters' => ['default', 'redis-password'],
-            ],
-        ]);
-
-        self::assertSame(['[secret]', '[secret]'], $result['request']['parameters']);
-    }
-
-    public function testItLeavesDatabaseLogsUnchanged(): void
+    public function testItLeavesDatabaseContentUnredactedButStillLimitsCapacity(): void
     {
         $processor = $this->processor([
             'sensitive_fields' => ['password'],
@@ -141,10 +200,16 @@ class PayloadProcessorTest extends TestCase
             'request' => [
                 'sql' => "select * from users where password = 'plain-secret'",
             ],
-            'response' => str_repeat('x', 20),
+            'response' => ['body' => ['password' => 'plain-secret', 'value' => str_repeat('x', 20)]],
         ];
 
-        self::assertSame($context, $processor->process('dblog', $context));
+        $result = $processor->process('dblog', $context);
+
+        self::assertLessThanOrEqual(8, strlen($result['request']['sql']));
+        self::assertNull($result['response']['body']);
+        self::assertStringStartsWith('selec', $result['request']['sql']);
+        self::assertArrayHasKey('request.sql', $result['payload_truncation']);
+        self::assertArrayHasKey('response.body', $result['payload_truncation']);
     }
 
     /**

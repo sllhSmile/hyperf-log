@@ -49,6 +49,21 @@ class CustomizeJsonFormatterTest extends TestCase
         self::assertArrayHasKey('coroutine_id', $output);
     }
 
+    public function testItWritesStructuredJsonBodyWithoutDoubleEncoding(): void
+    {
+        $formatter = $this->formatter('demo');
+        $record = new LogRecord(new \DateTimeImmutable('2026-08-25 12:00:00'), 'apilog', Level::Info, 'apilog', [
+            'request' => ['body' => ['token' => '****']],
+        ]);
+
+        $formatted = $formatter->format($record);
+        $output = json_decode($formatted, true, flags: JSON_THROW_ON_ERROR);
+
+        self::assertSame(['token' => '****'], $output['request']['body']);
+        self::assertStringContainsString('"body":{"token":"****"}', $formatted);
+        self::assertStringNotContainsString('\\"token\\"', $formatted);
+    }
+
     private function formatter(string $appName): CustomizeJsonFormatter
     {
         $config = new LogConfig(new Config(['app_name' => $appName]));

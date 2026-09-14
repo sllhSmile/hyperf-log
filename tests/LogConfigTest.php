@@ -100,11 +100,13 @@ class LogConfigTest extends TestCase
             'default' => 'default',
             'channels' => [
                 'dblog' => ['response_enabled' => true],
+                'redislog' => ['response_enabled' => true],
                 'sdklog' => ['response_enabled' => false],
             ],
         ]]));
 
         self::assertTrue($config->responseEnabled('dblog'));
+        self::assertTrue($config->responseEnabled('redislog'));
         self::assertFalse($config->responseEnabled('sdklog'));
         self::assertFalse((new LogConfig(new Config([])))->responseEnabled('dblog'));
     }

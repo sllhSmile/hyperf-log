@@ -12,7 +12,8 @@ namespace Sllhsmile\HyperfLog\Contract;
  * 修改调用方仍在使用的上下文，也不应读取 PSR-7 Stream 等请求期资源。
  *
  * 内置实现会处理 apilog、sdklog 和 redislog，并刻意让 dblog 保持原有 SQL 与
- * bindings 结构；替换实现时应自行决定是否延续该兼容行为。
+ * bindings 内容、不执行脱敏；四类日志都会应用容量限制。替换实现时应自行决定是否
+ * 延续该兼容行为。
  */
 interface PayloadProcessorInterface
 {

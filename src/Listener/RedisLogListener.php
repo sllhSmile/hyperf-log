@@ -13,12 +13,12 @@ use Sllhsmile\HyperfLog\Support\RequestContext;
 class RedisLogListener implements ListenerInterface
 {
     /**
-     * 注入 Redis 日志所需配置、写入器和请求上下文。
+     * 注入 Redis 日志依赖；RequestContext 参数保留既有公开构造签名。
      */
     public function __construct(
         private LogConfig $config,
         private LogWriter $writer,
-        private RequestContext $requestContext,
+        protected RequestContext $requestContext,
     ) {
     }
 
@@ -40,27 +40,28 @@ class RedisLogListener implements ListenerInterface
             return;
         }
 
-        // 原始参数单独记录，formatted_command 便于人工排查；生产环境应由 processor 脱敏。
+        // 与 dblog 一致，命令和参数合并为一条可直接阅读的完整命令，避免再重复记录
+        // parameters。Redis 命令缺少统一的字段语义，除 AUTH 外不承诺字段级脱敏。
+        $response = $this->config->responseEnabled('redislog')
+            ? ['body' => $event->throwable ? null : $event->result]
+            : null;
+
         $this->writer->info('redislog', [
             'app_name' => $this->config->appName(),
             'request' => [
                 'connection' => $event->connectionName,
                 'command' => $this->formatCommand($event),
-                'parameters' => $event->parameters,
             ],
             'exception' => $event->throwable ? [
                 'class' => $event->throwable::class,
-                'error' => $event->throwable->getMessage(),
+                'message' => $event->throwable->getMessage(),
                 'code' => $event->throwable->getCode(),
             ] : null,
-            'response' => $event->throwable ? [
-                'error' => $event->throwable->getMessage(),
-                'code' => $event->throwable->getCode(),
-            ] : $event->result,
+            'response' => $response,
             'start_time' => null,
             'end_time' => null,
-            // CommandExecuted::$time 单位为毫秒，保持原 redislog 的字符串格式。
-            'run_time' => $event->time . ' ms',
+            // CommandExecuted::$time 已经以毫秒为单位，保留数值便于日志平台聚合。
+            'duration_ms' => $event->time,
         ]);
     }
 

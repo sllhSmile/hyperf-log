@@ -9,13 +9,13 @@ use Sllhsmile\HyperfLog\Contract\PayloadProcessorInterface;
 /**
  * 对 API、Guzzle 和 Redis 日志执行字段脱敏与容量限制。
  *
- * 处理顺序固定为“结构化字段脱敏 -> 请求 URL/Body 脱敏 -> Redis AUTH 兜底 ->
- * 大字段截断”，避免截断后失去结构而无法继续识别敏感字段。处理器由 LogWriter
- * 在日志子协程内调用；dblog 暂不参与处理，以保持现有 SQL 和 bindings 输出行为。
+ * 处理顺序固定为“结构化字段脱敏 -> 请求 URL/Body 脱敏与 JSON 解析 -> 大字段截断”，
+ * 避免截断后失去结构而无法继续识别敏感字段。处理器由 LogWriter 在日志子协程内调用；
+ * dblog 不参与脱敏，但仍会执行容量限制。
  *
- * 当前只解析 JSON 与 application/x-www-form-urlencoded 请求体；multipart/form-data
- * 及其他原始文本只应用容量限制。Redis 的格式化 command 字符串也不会被重新解析，
- * 调用方不应将这些未结构化内容视为已经完成字段级脱敏。
+ * 入站 multipart/form-data 由 ApiLogListener 在当前请求协程中转换为字段和文件元数据；
+ * sdklog 的出站 multipart 及其他原始文本只应用容量限制。Redis 的格式化 command
+ * 字符串也不会被重新解析，调用方不应将这些未结构化内容视为已经完成字段级脱敏。
  */
 class PayloadProcessor implements PayloadProcessorInterface
 {
@@ -25,21 +25,18 @@ class PayloadProcessor implements PayloadProcessorInterface
 
     public function process(string $type, array $context): array
     {
-        // 数据库日志需要保留 SQL、bindings 和结果的既有类型，当前不参与任何内容处理。
-        if ($type === 'dblog') {
-            return $context;
-        }
+        if ($type !== 'dblog') {
+            $fields = array_fill_keys(array_map('strtolower', $this->config->payloadSensitiveFields()), true);
+            $replacement = $this->config->payloadRedactionValue();
 
-        $fields = array_fill_keys(array_map('strtolower', $this->config->payloadSensitiveFields()), true);
-        $replacement = $this->config->payloadRedactionValue();
-
-        // 先递归处理已结构化的 Header、Query 参数、响应数组及 Redis parameters。
-        $context = $this->redactArray($context, $fields, $replacement);
-        // URL 与字符串请求体需要按各自编码格式进行第二阶段处理。
-        $this->redactRequest($context, $fields, $replacement);
-
-        if ($type === 'redislog') {
-            $this->redactRedisAuth($context, $replacement);
+            // 先递归处理已结构化的 Header、multipart 字段及响应数组。
+            $context = $this->redactArray($context, $fields, $replacement);
+            // 只有 HTTP 采集器才按 Content-Type 解释字符串 Body；Redis 字符串结果即使
+            // 内容恰好是 JSON，也仍应保留 Redis 返回的字符串类型。
+            if (in_array($type, ['apilog', 'sdklog'], true)) {
+                $this->redactRequest($context, $fields, $replacement);
+                $this->redactResponse($context, $fields, $replacement);
+            }
         }
 
         // 脱敏必须早于截断，否则被截成预览字符串后将无法再可靠识别字段名。
@@ -106,60 +103,86 @@ class PayloadProcessor implements PayloadProcessorInterface
     }
 
     /**
-     * 处理 request.url 和已快照为字符串的 request.options。
+     * 处理 request.url 和已快照为字符串的 request.body。
      *
-     * JSON 优先按内容识别，不强制依赖 Content-Type；表单字符串只有在明确声明为
-     * application/x-www-form-urlencoded 时才解析，避免误改普通文本。
+     * JSON 在 Content-Type 缺失时兼容按内容识别，显式声明其他媒体类型时保持原字符串；
+     * 表单字符串只有在明确声明为 application/x-www-form-urlencoded 时才处理。
      *
      * @param array<string, mixed> $context
      * @param array<string, true> $fields
      */
     private function redactRequest(array &$context, array $fields, string $replacement): void
     {
-        if ($fields === [] || ! isset($context['request']) || ! is_array($context['request'])) {
+        if (! isset($context['request']) || ! is_array($context['request'])) {
             return;
         }
 
         $request = &$context['request'];
-        if (isset($request['url']) && is_string($request['url'])) {
+        if ($fields !== [] && isset($request['url']) && is_string($request['url'])) {
             $request['url'] = $this->redactUrl($request['url'], $fields, $replacement);
         }
 
-        if (! isset($request['options']) || ! is_string($request['options']) || $request['options'] === '') {
+        if (! isset($request['body']) || ! is_string($request['body']) || $request['body'] === '') {
             return;
         }
 
-        $decoded = json_decode($request['options'], true);
-        if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
-            $decoded = $this->redactArray($decoded, $fields, $replacement);
-            $encoded = json_encode($decoded, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-            if ($encoded !== false) {
-                $request['options'] = $encoded;
+        if ($this->shouldDecodeJson($request)) {
+            $decoded = json_decode($request['body'], true);
+            if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                // JSON 对象和数组保留结构，避免 Formatter 再次转义为 JSON 字符串。
+                $request['body'] = $this->redactArray($decoded, $fields, $replacement);
+
+                return;
             }
+        }
 
+        if ($fields !== [] && $this->contentType($request) === 'application/x-www-form-urlencoded') {
+            $request['body'] = $this->redactQueryString($request['body'], $fields, $replacement);
+        }
+
+        // 入站 multipart/form-data 已由 ApiLogListener 转换为数组；出站 multipart 和
+        // 其他非 JSON 原始文本保持原值并仅执行容量限制，避免不完整解析破坏日志内容。
+    }
+
+    /**
+     * 对字符串形式的 JSON 响应执行字段脱敏；非 JSON 响应保持原样。
+     *
+     * @param array<string, mixed> $context
+     * @param array<string, true> $fields
+     */
+    private function redactResponse(array &$context, array $fields, string $replacement): void
+    {
+        $response = $context['response'] ?? null;
+        if (! is_array($response) || ! $this->shouldDecodeJson($response)) {
             return;
         }
 
-        if ($this->requestContentType($request) === 'application/x-www-form-urlencoded') {
-            $request['options'] = $this->redactQueryString($request['options'], $fields, $replacement);
+        $body = $response['body'] ?? null;
+        if (! is_string($body) || $body === '') {
+            return;
         }
 
-        // multipart/form-data 需要按 boundary 解析；其他非 JSON 原始文本也缺少可靠结构。
-        // 当前保持原值并仅在后续执行容量限制，避免用不完整解析破坏日志内容。
+        $decoded = json_decode($body, true);
+        if (json_last_error() !== JSON_ERROR_NONE || ! is_array($decoded)) {
+            return;
+        }
+
+        // JSON 响应同样保留结构；普通文本响应继续保持原字符串。
+        $context['response']['body'] = $this->redactArray($decoded, $fields, $replacement);
     }
 
     /**
      * 从 Header 中提取不带 charset、boundary 等参数的媒体类型。
      *
-     * @param array<string, mixed> $request
+     * @param array<string, mixed> $message
      */
-    private function requestContentType(array $request): string
+    private function contentType(array $message): string
     {
-        if (! isset($request['headers']) || ! is_array($request['headers'])) {
+        if (! isset($message['headers']) || ! is_array($message['headers'])) {
             return '';
         }
 
-        foreach ($request['headers'] as $name => $value) {
+        foreach ($message['headers'] as $name => $value) {
             if (strtolower((string) $name) !== 'content-type') {
                 continue;
             }
@@ -170,6 +193,20 @@ class PayloadProcessor implements PayloadProcessorInterface
         }
 
         return '';
+    }
+
+    /**
+     * Header 缺失时兼容按内容识别 JSON；显式声明其他媒体类型时尊重发送方格式。
+     *
+     * @param array<string, mixed> $message
+     */
+    private function shouldDecodeJson(array $message): bool
+    {
+        $contentType = $this->contentType($message);
+
+        return $contentType === ''
+            || $contentType === 'application/json'
+            || str_ends_with($contentType, '+json');
     }
 
     /**
@@ -241,51 +278,10 @@ class PayloadProcessor implements PayloadProcessorInterface
     }
 
     /**
-     * Redis AUTH 参数没有字段名，因此始终遮蔽，避免通用字段配置关闭后泄露凭据。
-     *
-     * 此处仅处理结构化 parameters；request.command 是监听器生成的展示字符串，当前
-     * 不重新解析。普通 Redis 命令仍依赖 parameters 中的字段名执行通用脱敏。
-     *
-     * @param array<string, mixed> $context
-     */
-    private function redactRedisAuth(array &$context, string $replacement): void
-    {
-        $command = $context['request']['command'] ?? null;
-        if (! is_string($command) || preg_match('/^AUTH(?:\s|$)/i', $command) !== 1) {
-            return;
-        }
-
-        if (array_key_exists('parameters', $context['request'])) {
-            $context['request']['parameters'] = $this->replaceAllValues(
-                $context['request']['parameters'],
-                $replacement,
-            );
-        }
-    }
-
-    /**
-     * 递归替换 AUTH 的全部参数，兼容仅密码和用户名加密码两种命令形式。
-     */
-    private function replaceAllValues(mixed $value, string $replacement): mixed
-    {
-        if (! is_array($value)) {
-            return $replacement;
-        }
-
-        foreach ($value as $key => $item) {
-            $value[$key] = is_array($item)
-                ? $this->replaceAllValues($item, $replacement)
-                : $replacement;
-        }
-
-        return $value;
-    }
-
-    /**
      * 仅限制各采集器中可能快速膨胀的负载字段，基础定位字段保持完整。
      *
-     * apilog/sdklog 限制请求体和响应体；redislog 限制参数和结果。发生截断时，
-     * payload_truncation 会按字段路径记录截断前的字节数。
+     * apilog/sdklog 限制请求体、上传文件元数据和响应体；redislog 限制完整命令和结果；
+     * dblog 限制完整 SQL 和结果。发生截断时，payload_truncation 会记录字段路径和容量信息。
      *
      * @param array<string, mixed> $context
      */
@@ -296,13 +292,19 @@ class PayloadProcessor implements PayloadProcessorInterface
             return;
         }
 
-        $truncation = [];
+        $truncation = isset($context['payload_truncation']) && is_array($context['payload_truncation'])
+            ? $context['payload_truncation']
+            : [];
         if (in_array($type, ['apilog', 'sdklog'], true)) {
-            $this->truncateNestedField($context, ['request', 'options'], 'request.options', $maxBytes, $truncation);
-            $this->truncateNestedField($context, ['response'], 'response', $maxBytes, $truncation);
+            $this->truncateNestedField($context, ['request', 'body'], 'request.body', $maxBytes, $truncation);
+            $this->omitNestedField($context, ['request', 'files'], 'request.files', $maxBytes, $truncation);
+            $this->truncateNestedField($context, ['response', 'body'], 'response.body', $maxBytes, $truncation);
         } elseif ($type === 'redislog') {
-            $this->truncateNestedField($context, ['request', 'parameters'], 'request.parameters', $maxBytes, $truncation);
-            $this->truncateNestedField($context, ['response'], 'response', $maxBytes, $truncation);
+            $this->truncateNestedField($context, ['request', 'command'], 'request.command', $maxBytes, $truncation);
+            $this->truncateNestedField($context, ['response', 'body'], 'response.body', $maxBytes, $truncation);
+        } elseif ($type === 'dblog') {
+            $this->truncateNestedField($context, ['request', 'sql'], 'request.sql', $maxBytes, $truncation);
+            $this->truncateNestedField($context, ['response', 'body'], 'response.body', $maxBytes, $truncation);
         }
 
         if ($truncation !== []) {
@@ -311,7 +313,10 @@ class PayloadProcessor implements PayloadProcessorInterface
     }
 
     /**
-     * 定位嵌套字段并在超限时替换为字符串预览。
+     * 定位嵌套字段并执行容量限制。
+     *
+     * 文本超限时保留有界预览；数组或对象超限时设为 null，避免把结构化字段临时改成
+     * 字符串并造成下游索引类型不稳定。原始字节数统一写入 payload_truncation。
      *
      * @param array<string, mixed> $context
      * @param string[] $segments
@@ -336,8 +341,6 @@ class PayloadProcessor implements PayloadProcessorInterface
             return;
         }
 
-        // 数组超限后会变成 JSON 预览字符串；payload_truncation 记录原始字节数，便于
-        // 日志消费者区分“原本就是字符串”和“为控制容量而序列化”的字段。
         $serialized = is_string($value)
             ? $value
             : json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PARTIAL_OUTPUT_ON_ERROR);
@@ -346,8 +349,52 @@ class PayloadProcessor implements PayloadProcessorInterface
         }
 
         $originalBytes = strlen($serialized);
-        $value = $this->truncateString($serialized, $maxBytes);
-        $truncation[$path] = ['original_bytes' => $originalBytes];
+        $value = is_string($value) ? $this->truncateString($serialized, $maxBytes) : null;
+        $truncation[$path] = [
+            'limit_bytes' => $maxBytes,
+            'original_bytes' => $originalBytes,
+        ];
+    }
+
+    /**
+     * 结构化字段超限时设为 null，避免数组被替换成字符串后产生索引类型冲突。
+     *
+     * @param array<string, mixed> $context
+     * @param string[] $segments
+     * @param array<string, mixed> $truncation
+     */
+    private function omitNestedField(
+        array &$context,
+        array $segments,
+        string $path,
+        int $maxBytes,
+        array &$truncation,
+    ): void {
+        $value = &$context;
+        foreach ($segments as $segment) {
+            if (! is_array($value) || ! array_key_exists($segment, $value)) {
+                return;
+            }
+            $value = &$value[$segment];
+        }
+
+        if ($value === null) {
+            return;
+        }
+
+        $serialized = json_encode(
+            $value,
+            JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PARTIAL_OUTPUT_ON_ERROR,
+        );
+        if (! is_string($serialized) || strlen($serialized) <= $maxBytes) {
+            return;
+        }
+
+        $truncation[$path] = [
+            'limit_bytes' => $maxBytes,
+            'original_bytes' => strlen($serialized),
+        ];
+        $value = null;
     }
 
     /**

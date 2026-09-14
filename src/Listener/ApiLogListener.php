@@ -6,20 +6,32 @@ namespace Sllhsmile\HyperfLog\Listener;
 
 use Hyperf\Event\Contract\ListenerInterface;
 use Hyperf\HttpServer\Event\RequestHandled;
+use Psr\Http\Message\ResponseInterface;
+use Psr\Http\Message\ServerRequestInterface;
+use Psr\Http\Message\StreamInterface;
+use Psr\Http\Message\UploadedFileInterface;
 use Sllhsmile\HyperfLog\Support\LogConfig;
 use Sllhsmile\HyperfLog\Support\LogWriter;
 use Sllhsmile\HyperfLog\Support\RequestContext;
+use Sllhsmile\HyperfLog\Support\StreamSnapshotter;
 
 class ApiLogListener implements ListenerInterface
 {
+    private readonly StreamSnapshotter $streamSnapshotter;
+
     /**
      * 注入 API 日志所需配置、写入器和请求上下文。
+     *
+     * @param StreamSnapshotter|null $streamSnapshotter 不消费业务流的请求/响应 Body 快照器
      */
     public function __construct(
         private readonly LogConfig      $config,
         private readonly LogWriter      $writer,
         private readonly RequestContext $requestContext,
+        ?StreamSnapshotter $streamSnapshotter = null,
     ) {
+        // 保留原有三参数构造兼容；容器和测试均可显式注入统一的 Stream 快照策略。
+        $this->streamSnapshotter = $streamSnapshotter ?? new StreamSnapshotter();
     }
 
     public function listen(): array
@@ -45,20 +57,15 @@ class ApiLogListener implements ListenerInterface
         $startTime = $this->requestContext->startTime();
         $request = $event->request;
         $response = $event->response;
+        $truncation = [];
 
-        $this->writer->info('apilog', [
+        $context = [
             // request_id 由 CustomizeJsonFormatter 从 RequestContext 统一写入顶层。
             'server' => $event->server,
             // 与宿主项目日志结构保持一致，便于下游日志平台按应用检索。
             'app_name' => $this->config->appName(),
-            'request' => $request ? [
-                'method' => $request->getMethod(),
-                'url' => (string) $request->getUri(),
-                'headers' => $request->getHeaders(),
-                'options' => (string) $request->getBody(),
-            ] : null,
-            // 与原 apilog 一致：JSON 响应转数组，非 JSON 响应保留原字符串。
-            'response' => $response ? $this->responseBody($response) : null,
+            'request' => $request ? $this->requestLog($request, $truncation) : null,
+            'response' => $response ? $this->responseLog($response, $truncation) : null,
             'exception' => $event->exception ? [
                 'class' => $event->exception::class,
                 'message' => $event->exception->getMessage(),
@@ -66,47 +73,124 @@ class ApiLogListener implements ListenerInterface
             ] : null,
             'start_time' => $startTime,
             'end_time' => $endTime,
-            // 保持宿主项目 run_time 的毫秒字符串格式。
-            'run_time' => $startTime === null ? null : round(($endTime - $startTime) * 1000, 2) . 'ms',
-        ]);
+            'duration_ms' => $startTime === null ? null : round(($endTime - $startTime) * 1000, 2),
+        ];
+
+        if ($truncation !== []) {
+            $context['payload_truncation'] = $truncation;
+        }
+
+        $this->writer->info('apilog', $context);
     }
 
     /**
-     * 获取响应体并优先转换 JSON 内容。
+     * 在当前请求协程中生成可安全交给日志子协程的数据快照。
      *
-     * @param \Psr\Http\Message\ResponseInterface $response HTTP 响应对象
+     * multipart/form-data 已由 HTTP Server 拆分为普通字段和上传文件。此处直接读取
+     * 解析结果，文件只保留客户端元数据，既能让 PayloadProcessor 按字段脱敏，也避免
+     * 原始 multipart Body 中的密码和文件内容进入日志。
+     *
+     * @param array<string, array<string, int>> $truncation
+     * @return array<string, mixed>
      */
-    private function responseBody(\Psr\Http\Message\ResponseInterface $response): mixed
+    private function requestLog(ServerRequestInterface $request, array &$truncation): array
     {
-        // PSR-7 响应体是一个流对象。直接转换为字符串会从当前指针位置读到 EOF，
-        // 而 RequestHandled 事件发生在响应真正发送之前；如果不恢复指针，
-        // 后续 ResponseEmitter 可能只能读到空内容，客户端就会收到空响应。
-        $stream = $response->getBody();
+        $context = [
+            'method' => $request->getMethod(),
+            'url' => (string) $request->getUri(),
+            'headers' => $request->getHeaders(),
+        ];
 
-        // 只有可回绕（seekable）的流才能安全地先读日志、再恢复读取位置。
-        // 不可回绕的流仍按原行为读取，但无法改变其底层流的当前位置。
-        $position = null;
-        if ($stream->isSeekable()) {
-            // 保存调用本方法前的位置，避免破坏调用方已经建立的读取状态。
-            $position = $stream->tell();
+        if ($this->isMultipart($request)) {
+            $parsedBody = $request->getParsedBody();
+            $context['body'] = is_array($parsedBody)
+                ? $parsedBody
+                : (is_object($parsedBody) ? get_object_vars($parsedBody) : []);
+            $context['files'] = $this->uploadedFileMetadata($request->getUploadedFiles());
 
-            // 日志必须从响应体开头读取，否则如果指针已经移动过，日志会缺少前半段内容。
-            $stream->rewind();
+            return $context;
         }
 
-        try {
-            // 读取完整响应体，供日志记录以及后面的 JSON 解析使用。
-            $body = (string) $stream;
-        } finally {
-            // 无论读取或字符串转换是否抛出异常，都要尝试恢复流位置。
-            // 这样日志监听器发生问题时，也不会额外破坏正常的 HTTP 响应发送流程。
-            if ($stream->isSeekable()) {
-                // 恢复到读取日志前的位置；通常该位置是 0，ResponseEmitter 随后可正常发送正文。
-                $stream->seek($position ?? 0);
+        $context['body'] = $this->snapshotBody($request->getBody(), 'request.body', $truncation);
+
+        return $context;
+    }
+
+    /**
+     * 只按媒体类型判断 multipart，忽略 boundary 等参数并兼容 Header 大小写。
+     */
+    private function isMultipart(ServerRequestInterface $request): bool
+    {
+        $contentType = strtolower(trim(explode(';', $request->getHeaderLine('Content-Type'), 2)[0]));
+
+        return $contentType === 'multipart/form-data';
+    }
+
+    /**
+     * 将上传文件树转换为纯数组，禁止把 UploadedFile 或其 Stream 传入日志子协程。
+     *
+     * @param array<array-key, mixed> $files
+     * @return array<array-key, mixed>
+     */
+    private function uploadedFileMetadata(array $files): array
+    {
+        $metadata = [];
+        foreach ($files as $name => $file) {
+            if (is_array($file)) {
+                $metadata[$name] = $this->uploadedFileMetadata($file);
+                continue;
+            }
+
+            if (! $file instanceof UploadedFileInterface) {
+                continue;
+            }
+
+            $metadata[$name] = [
+                'filename' => $file->getClientFilename(),
+                'media_type' => $file->getClientMediaType(),
+                'size' => $file->getSize(),
+                'error' => $file->getError(),
+            ];
+        }
+
+        return $metadata;
+    }
+
+    /**
+     * 生成 HTTP 响应元数据和有界 Body 快照。
+     *
+     * @param array<string, array<string, int>> $truncation
+     * @return array{status_code: int, headers: array<string, string[]>, body: string|null}
+     */
+    private function responseLog(ResponseInterface $response, array &$truncation): array
+    {
+        // RequestHandled 发生在 ResponseEmitter 发送正文之前。不可回绕的响应体不能为了
+        // 日志而读取，否则客户端可能收到空内容；这种场景固定返回 null。
+        $body = $this->snapshotBody($response->getBody(), 'response.body', $truncation);
+
+        return [
+            'status_code' => $response->getStatusCode(),
+            'headers' => $response->getHeaders(),
+            'body' => $body,
+        ];
+    }
+
+    /**
+     * 在业务协程内执行有界 Stream 快照，并把超限信息交给日志子协程继续处理。
+     *
+     * @param array<string, array<string, int>> $truncation
+     */
+    private function snapshotBody(StreamInterface $stream, string $path, array &$truncation): ?string
+    {
+        $maxBytes = $this->config->payloadMaxBytes();
+        $snapshot = $this->streamSnapshotter->snapshot($stream, $maxBytes);
+        if ($snapshot->truncated && $maxBytes !== null) {
+            $truncation[$path] = ['limit_bytes' => $maxBytes];
+            if ($snapshot->originalBytes !== null) {
+                $truncation[$path]['original_bytes'] = $snapshot->originalBytes;
             }
         }
 
-        // JSON 响应转换为数组，便于日志检索；非 JSON 响应保留原始字符串。
-        return json_decode($body, true) ?? $body;
+        return $snapshot->contents;
     }
 }

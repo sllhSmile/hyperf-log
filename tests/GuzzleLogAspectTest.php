@@ -4,18 +4,23 @@ declare(strict_types=1);
 
 namespace Sllhsmile\HyperfLog\Tests;
 
+use GuzzleHttp\Client;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Promise\Create;
+use GuzzleHttp\Psr7\NoSeekStream;
 use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
+use GuzzleHttp\Psr7\Utils;
 use Hyperf\Config\Config;
 use Hyperf\Context\Context;
+use Hyperf\Di\Aop\ProceedingJoinPoint;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\RequestInterface;
 use Sllhsmile\HyperfLog\Aspect\GuzzleLogAspect;
 use Sllhsmile\HyperfLog\Support\LogConfig;
 use Sllhsmile\HyperfLog\Support\LogWriter;
 use Sllhsmile\HyperfLog\Support\RequestContext;
+use Sllhsmile\HyperfLog\Support\StreamSnapshotter;
 
 class GuzzleLogAspectTest extends TestCase
 {
@@ -45,6 +50,82 @@ class GuzzleLogAspectTest extends TestCase
         $response = $stack(new Request('GET', 'https://example.com'), [])->wait();
 
         self::assertInstanceOf(Response::class, $response);
+    }
+
+    public function testItLogsSeekableBodiesAndRestoresTheirOriginalPositions(): void
+    {
+        $requestBody = Utils::streamFor('request-body');
+        $requestBody->seek(4);
+        $responseBody = Utils::streamFor('{"ok":true}');
+        $responseBody->seek(3);
+
+        $writer = $this->createMock(LogWriter::class);
+        $writer->expects(self::once())->method('info')->with(
+            'sdklog',
+            self::callback(static fn (array $context): bool =>
+                $context['request']['body'] === 'request-body'
+                && $context['response']['status_code'] === 200
+                && $context['response']['body'] === '{"ok":true}'
+                && is_float($context['duration_ms'])),
+        );
+
+        $config = new LogConfig(new Config([
+            'logger' => ['channels' => ['sdklog' => ['enabled' => true, 'response_enabled' => true]]],
+            'trace_log' => ['guzzle' => []],
+        ]));
+        $aspect = new GuzzleLogAspect(
+            $config,
+            $writer,
+            new RequestContext($config),
+            new StreamSnapshotter(),
+        );
+        $method = new \ReflectionMethod($aspect, 'logMiddleware');
+        $middleware = $method->invoke($aspect);
+        $stack = new HandlerStack(static fn () => Create::promiseFor(new Response(200, [], $responseBody)));
+        $stack->push($middleware, 'trace_log_sdk');
+
+        $stack(new Request('POST', 'https://example.com', [], $requestBody), [])->wait();
+
+        self::assertSame(4, $requestBody->tell());
+        self::assertSame(3, $responseBody->tell());
+    }
+
+    public function testItDoesNotConsumeNonSeekableRequestOrResponseBodies(): void
+    {
+        $requestBody = Utils::streamFor('request-secret');
+        $requestBody->seek(2);
+        $responseBody = Utils::streamFor('response-secret');
+        $responseBody->seek(3);
+
+        $writer = $this->createMock(LogWriter::class);
+        $writer->expects(self::once())->method('info')->with(
+            'sdklog',
+            self::callback(static fn (array $context): bool =>
+                $context['request']['body'] === null
+                && $context['response']['body'] === null),
+        );
+
+        $config = new LogConfig(new Config([
+            'logger' => ['channels' => ['sdklog' => ['enabled' => true, 'response_enabled' => true]]],
+            'trace_log' => ['guzzle' => []],
+        ]));
+        $aspect = new GuzzleLogAspect(
+            $config,
+            $writer,
+            new RequestContext($config),
+            new StreamSnapshotter(),
+        );
+        $method = new \ReflectionMethod($aspect, 'logMiddleware');
+        $middleware = $method->invoke($aspect);
+        $stack = new HandlerStack(static fn () => Create::promiseFor(
+            new Response(200, [], new NoSeekStream($responseBody)),
+        ));
+        $stack->push($middleware, 'trace_log_sdk');
+
+        $stack(new Request('POST', 'https://example.com', [], new NoSeekStream($requestBody)), [])->wait();
+
+        self::assertSame(2, $requestBody->tell());
+        self::assertSame(3, $responseBody->tell());
     }
 
     /**
@@ -97,6 +178,68 @@ class GuzzleLogAspectTest extends TestCase
         $response = $stack(new Request('GET', 'https://example.com'), [])->wait();
 
         self::assertSame(200, $response->getStatusCode());
+    }
+
+    public function testItLogsSynchronousHandlerExceptionAndPreservesIt(): void
+    {
+        $exception = new \RuntimeException('handler failed');
+        $writer = $this->createMock(LogWriter::class);
+        $writer->expects(self::once())->method('info')->with(
+            'sdklog',
+            self::callback(static fn (array $context): bool =>
+                $context['exception']['message'] === 'handler failed'),
+        );
+
+        $config = new LogConfig(new Config([
+            'logger' => ['channels' => ['sdklog' => ['enabled' => true]]],
+        ]));
+        $aspect = new GuzzleLogAspect($config, $writer, new RequestContext($config));
+        $method = new \ReflectionMethod($aspect, 'logMiddleware');
+        $middleware = $method->invoke($aspect);
+        $handler = $middleware(static function () use ($exception): never {
+            throw $exception;
+        });
+
+        $this->expectExceptionObject($exception);
+        $handler(new Request('GET', 'https://example.com'), []);
+    }
+
+    public function testItSkipsMiddlewareInjectionForCallableHandler(): void
+    {
+        $handler = static fn () => Create::promiseFor(new Response());
+        $client = new Client(['handler' => $handler]);
+        $config = new LogConfig(new Config([]));
+        $aspect = new GuzzleLogAspect(
+            $config,
+            $this->createMock(LogWriter::class),
+            new RequestContext($config),
+        );
+        $joinPoint = $this->createMock(ProceedingJoinPoint::class);
+        $joinPoint->expects(self::once())->method('process')->willReturn(null);
+        $joinPoint->expects(self::once())->method('getInstance')->willReturn($client);
+
+        self::assertNull($aspect->process($joinPoint));
+        self::assertSame($handler, $client->getConfig('handler'));
+    }
+
+    public function testItDoesNotDuplicateMiddlewareOnSharedHandlerStack(): void
+    {
+        $writer = $this->createMock(LogWriter::class);
+        $writer->expects(self::once())->method('info')->with('sdklog', self::isType('array'));
+        $config = new LogConfig(new Config([
+            'logger' => ['channels' => ['sdklog' => ['enabled' => true]]],
+        ]));
+        $aspect = new GuzzleLogAspect($config, $writer, new RequestContext($config));
+        $stack = HandlerStack::create(static fn () => Create::promiseFor(new Response()));
+
+        foreach ([new Client(['handler' => $stack]), new Client(['handler' => $stack])] as $client) {
+            $joinPoint = $this->createMock(ProceedingJoinPoint::class);
+            $joinPoint->method('process')->willReturn(null);
+            $joinPoint->method('getInstance')->willReturn($client);
+            $aspect->process($joinPoint);
+        }
+
+        $stack(new Request('GET', 'https://example.com'), [])->wait();
     }
 
     /**

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Sllhsmile\HyperfLog\Aspect;
 
 use GuzzleHttp\Client;
+use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
 use GuzzleHttp\Promise\Create;
 use GuzzleHttp\Promise\PromiseInterface;
@@ -15,6 +16,7 @@ use Psr\Http\Message\ResponseInterface;
 use Sllhsmile\HyperfLog\Support\LogConfig;
 use Sllhsmile\HyperfLog\Support\LogWriter;
 use Sllhsmile\HyperfLog\Support\RequestContext;
+use Sllhsmile\HyperfLog\Support\StreamSnapshotter;
 use Throwable;
 
 /**
@@ -31,6 +33,8 @@ use Throwable;
  */
 class GuzzleLogAspect extends AbstractAspect
 {
+    private readonly StreamSnapshotter $streamSnapshotter;
+
     /**
      * 需要切面的类和方法。
      *
@@ -49,12 +53,16 @@ class GuzzleLogAspect extends AbstractAspect
      * @param LogConfig $config 读取 trace_log 与宿主 logger 配置
      * @param LogWriter $writer 使用 Hyperf LoggerFactory 写入 SDK 日志
      * @param RequestContext $requestContext 管理当前协程的 request-id 与请求开始时间
+     * @param StreamSnapshotter|null $streamSnapshotter 不消费业务流的请求/响应 Body 快照器
      */
     public function __construct(
         private readonly LogConfig $config,
         private readonly LogWriter $writer,
         private readonly RequestContext $requestContext,
+        ?StreamSnapshotter $streamSnapshotter = null,
     ) {
+        // 保留原有三参数构造兼容；所有请求和响应 Body 统一采用无副作用快照策略。
+        $this->streamSnapshotter = $streamSnapshotter ?? new StreamSnapshotter();
     }
 
     /**
@@ -71,11 +79,24 @@ class GuzzleLogAspect extends AbstractAspect
         // 先完成原始 Client 初始化，避免影响 Guzzle 构造过程。
         $result = $proceedingJoinPoint->process();
 
-        // HandlerStack 是 Guzzle 管理中间件执行顺序的容器。
-        $stack = $proceedingJoinPoint->getInstance()->getConfig('handler');
-        if ($stack === null) {
+        $client = $proceedingJoinPoint->getInstance();
+        if (! $client instanceof Client) {
             return $result;
         }
+
+        // HandlerStack 是 Guzzle 管理中间件执行顺序的容器。
+        $stack = $client->getConfig('handler');
+        // Guzzle 允许直接传入 callable handler。它没有 push()，不能因为安装日志包而
+        // 破坏这类 Client；当前只对可安全扩展的 HandlerStack 注入中间件。
+        if (! $stack instanceof HandlerStack) {
+            return $result;
+        }
+
+        // 同一个 HandlerStack 可能被多个 Client 复用。先移除本包已有中间件，确保每次
+        // 请求只注入一次 Header、超时和日志逻辑。
+        $stack->remove('trace_log_timeout');
+        $stack->remove('trace_log_request_headers');
+        $stack->remove('trace_log_sdk');
 
         // 无论 sdklog 是否开启，公共包安装后均提供超时和追踪 Header 能力。
         $this->pushTimeoutMiddleware($stack);
@@ -95,9 +116,9 @@ class GuzzleLogAspect extends AbstractAspect
      * 仅回写 Hyperf 协程客户端使用的 swoole 配置。优先级为调用方 Guzzle 参数、
      * trace_log.guzzle 的显式配置、Swoole 内置默认值。
      *
-     * @param mixed $stack Guzzle HandlerStack 实例
+     * @param HandlerStack $stack Guzzle 中间件栈
      */
-    private function pushTimeoutMiddleware(mixed $stack): void
+    private function pushTimeoutMiddleware(HandlerStack $stack): void
     {
         $middleware = function (callable $handler): callable {
             return function (RequestInterface $request, array $options) use ($handler) {
@@ -129,6 +150,7 @@ class GuzzleLogAspect extends AbstractAspect
         $value = $options[$option] ?? match ($option) {
             'timeout' => $this->config->guzzleTimeout(),
             'connect_timeout' => $this->config->guzzleConnectTimeout(),
+            default => null,
         };
 
         // 调用方和公共包均未设置时，不创建 swoole 配置，交由 Swoole 使用默认值。
@@ -151,9 +173,9 @@ class GuzzleLogAspect extends AbstractAspect
      * 每次请求发送前写入 request-id 与微秒级开始时间。request-id 统一取自当前
      * RequestContext，确保同一条链路内所有出站请求使用相同标识。
      *
-     * @param mixed $stack Guzzle HandlerStack 实例
+     * @param HandlerStack $stack Guzzle 中间件栈
      */
-    private function pushRequestHeaderMiddleware(mixed $stack): void
+    private function pushRequestHeaderMiddleware(HandlerStack $stack): void
     {
         $stack->push(Middleware::mapRequest(function (RequestInterface $request): RequestInterface {
             // 请求开始时间总是由当前出站调用生成，用于精确计算 SDK 调用耗时。
@@ -191,7 +213,19 @@ class GuzzleLogAspect extends AbstractAspect
 
                 // Handler 规范上返回 Promise，但 Create::promiseFor 也兼容自定义 Handler
                 // 直接返回 Response 的情况，确保下面始终能返回可等待的 Promise 链。
-                $promise = Create::promiseFor($handler($request, $options));
+                try {
+                    $promise = Create::promiseFor($handler($request, $options));
+                } catch (Throwable $reason) {
+                    // 自定义 Handler 可以在返回 Promise 前同步抛出；此时同样记录失败，
+                    // 并保持原始异常类型和调用栈不变。
+                    try {
+                        $this->writeLog($request, $startTime, null, $reason);
+                    } catch (Throwable $loggingException) {
+                        $this->reportLoggingFailure($loggingException, $request, $requestId, $reason);
+                    }
+
+                    throw $reason;
+                }
 
                 return $promise->then(
                     function (mixed $response) use ($request, $startTime, $requestId): mixed {
@@ -263,7 +297,8 @@ class GuzzleLogAspect extends AbstractAspect
     /**
      * 组织并写入 SDK 请求日志。
      *
-     * 响应体转换为字符串后立即 rewind，确保记录日志不会导致业务后续读取到空响应体。
+     * 仅对可回绕的请求/响应 Stream 获取完整快照，并恢复读取前的位置；不可回绕或读取
+     * 失败时 Body 记录为 null，确保日志旁路不会消费调用方随后还要读取的业务流。
      *
      * @param RequestInterface $request 当前出站请求对象
      * @param float $startTime 请求开始时间戳
@@ -278,24 +313,26 @@ class GuzzleLogAspect extends AbstractAspect
     ): void {
         // 第 1 步：记录日志时的时间即为请求结束时间。
         $endTime = microtime(true);
-        $responseBody = null;
+        $truncation = [];
+        $responseContext = null;
         // 第 2 步：响应体可能很大；未开启 sdklog.response_enabled 时完全不读取流。
         if ($response !== null && $this->config->responseEnabled('sdklog')) {
-            // 第 3 步：将流读取为字符串会移动指针，读取后必须复位供业务继续消费。
-            $responseBody = (string) $response->getBody();
-            $response->getBody()->rewind();
+            $responseContext = [
+                'status_code' => $response->getStatusCode(),
+                'headers' => $response->getHeaders(),
+                'body' => $this->snapshotBody($response->getBody(), 'response.body', $truncation),
+            ];
         }
-        // 第 4 步：请求、异常和耗时始终记录；响应字段严格受 response_enabled 控制。
-        $this->writer->info('sdklog', [
+        $context = [
             'app_name' => $this->config->appName(),
             'request' => [
                 'method' => $request->getMethod(),
                 'url' => (string) $request->getUri(),
                 'headers' => $request->getHeaders(),
-                'options' => (string) $request->getBody(),
+                'body' => $this->snapshotBody($request->getBody(), 'request.body', $truncation),
             ],
-            // 与宿主 sdklog 保持兼容：开启时记录第三方返回内容，关闭时固定为 null。
-            'response' => $responseBody === null ? null : json_decode($responseBody, true) ?? $responseBody,
+            // response_enabled 控制整个响应快照；关闭时固定为 null。
+            'response' => $responseContext,
             'exception' => $reason instanceof Throwable ? [
                 'class' => $reason::class,
                 'message' => $reason->getMessage(),
@@ -303,7 +340,35 @@ class GuzzleLogAspect extends AbstractAspect
             ] : ($reason === null ? null : ['message' => (string) $reason]),
             'start_time' => $startTime,
             'end_time' => $endTime,
-            'run_time' => round(($endTime - $startTime) * 1000, 2) . 'ms',
-        ]);
+            'duration_ms' => round(($endTime - $startTime) * 1000, 2),
+        ];
+
+        if ($truncation !== []) {
+            $context['payload_truncation'] = $truncation;
+        }
+
+        $this->writer->info('sdklog', $context);
+    }
+
+    /**
+     * 获取不会无限占用业务协程内存的 Body 快照。
+     *
+     * @param array<string, array<string, int>> $truncation
+     */
+    private function snapshotBody(
+        \Psr\Http\Message\StreamInterface $stream,
+        string $path,
+        array &$truncation,
+    ): ?string {
+        $maxBytes = $this->config->payloadMaxBytes();
+        $snapshot = $this->streamSnapshotter->snapshot($stream, $maxBytes);
+        if ($snapshot->truncated && $maxBytes !== null) {
+            $truncation[$path] = ['limit_bytes' => $maxBytes];
+            if ($snapshot->originalBytes !== null) {
+                $truncation[$path]['original_bytes'] = $snapshot->originalBytes;
+            }
+        }
+
+        return $snapshot->contents;
     }
 }

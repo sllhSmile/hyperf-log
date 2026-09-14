@@ -32,12 +32,12 @@ request ID 串联一次请求中的业务日志与下游调用。
 
 | 能力 | 行为 |
 | --- | --- |
-| `apilog` | 记录 HTTP 请求、响应、异常和耗时 |
+| `apilog` | 记录 HTTP 请求、响应状态、响应 Header、异常和耗时 |
 | `dblog` | 记录数据库连接、展开 bindings 后的 SQL、可选执行结果和耗时 |
-| `redislog` | 记录 Redis 命令、参数、结果、异常和耗时 |
-| `sdklog` | 记录 Guzzle 请求、可选响应、异常和耗时 |
+| `redislog` | 记录参数已展开的 Redis 完整命令、可选执行结果、异常和耗时 |
+| `sdklog` | 记录 Guzzle 请求、可选响应状态、响应 Header、异常和耗时 |
 | request ID | 接收入站 ID 或生成 UUID v7，并写入响应和 Guzzle 出站 Header |
-| 内容保护 | 对 API、Guzzle、Redis 日志执行字段脱敏和负载截断 |
+| 内容保护 | API/Guzzle 按字段脱敏，Redis `AUTH` 强制遮蔽，四类日志统一限制负载容量 |
 | 异步写入 | HTTP/RPC 协程中使用日志子协程；CLI 中同步写入 |
 
 所有采集器默认关闭。启用哪些日志、写入哪个文件，完全由宿主应用的
@@ -133,6 +133,7 @@ return [
         ],
         'redislog' => [
             'enabled' => false,
+            'response_enabled' => false,
             'handlers' => ['trace'],
         ],
         'sdklog' => [
@@ -176,12 +177,13 @@ Header，本包会生成 UUID v7，并将最终值写回响应 Header。
 | Channel | 默认状态 | `response_enabled` | 生产注意事项 |
 | --- | --- | --- | --- |
 | `apilog` | 关闭 | 不适用 | 请求体和响应体会被记录，并受 `payload.max_bytes` 限制 |
-| `dblog` | 关闭 | 默认 `false` | SQL 会展开 bindings；当前不参与脱敏或截断 |
-| `redislog` | 关闭 | 不适用 | 参数和结果会被记录；格式化命令存在下文所述边界 |
+| `dblog` | 关闭 | 默认 `false` | SQL 会展开 bindings；不脱敏，但 SQL 和结果仍受容量限制 |
+| `redislog` | 关闭 | 默认 `false` | 命令会展开全部参数；开启后才记录执行结果 |
 | `sdklog` | 关闭 | 默认 `false` | 请求始终记录；开启后才读取并记录响应体 |
 
-`response_enabled` 配置在各自的 `logger.channels.dblog` 或
-`logger.channels.sdklog` 下。建议生产环境保持关闭，确需响应内容时再独立开启。
+`response_enabled` 配置在各自的 `logger.channels.redislog`、
+`logger.channels.dblog` 或 `logger.channels.sdklog` 下。建议生产环境保持关闭，确需响应
+内容时再独立开启。
 
 如果需要分文件，可以为每个采集器提供独立 handler；如果已有共享 channel，也可以用
 `channel` 映射：
@@ -267,14 +269,22 @@ Header 名称和 Context 键可以在 `trace_log.php` 中分别修改。除非�
 | `payload.redaction_value` | `****` | 敏感值的替换内容 |
 | `payload.max_bytes` | `65536` | 单个负载字段允许记录的最大字节数 |
 
-内置处理器覆盖 Header、URL Query、JSON 请求体、URL encoded 表单，以及已经转换为数组的
-JSON 响应。发生截断时，字段会变为字符串预览，并在顶层增加元数据：
+内置处理器覆盖 Header、URL Query、JSON 请求体、URL encoded 表单、入站 API 的 multipart
+普通字段和 JSON 响应。可解析的 JSON 对象或数组会保留为结构化 `body`，普通文本和 URL
+encoded 表单保持字符串，multipart 普通字段保持数组。上传文件不读取内容，只在
+`request.files` 记录客户端文件名、媒体类型、大小和上传错误码。
+
+文本负载超限时会保留字符串预览；结构化负载或 PSR-7 Stream 超限时不会改写成字符串，
+而是将 `body` 设为 `null`。这些情况都会在顶层增加元数据：
 
 ```json
 {
-    "response": "truncated content...",
+    "response": {
+        "body": "truncated content..."
+    },
     "payload_truncation": {
-        "response": {
+        "response.body": {
+            "limit_bytes": 65536,
             "original_bytes": 183420
         }
     }
@@ -286,10 +296,14 @@ JSON 响应。发生截断时，字段会变为字符串预览，并在顶层增
 
 当前保护边界必须在生产使用前确认：
 
-- `multipart/form-data` 和其他无法识别结构的原始请求体不会做字段级脱敏，只会截断。
+- 为避免日志采集消费业务流，不可回绕或读取前已确认超限的 PSR-7 Stream 不读取 Body，
+  对应 `body` 为 `null`。
+- `apilog` 会使用 ServerRequest 已解析的 multipart 字段并进行脱敏，不记录原始 Body；
+  `sdklog` 的出站 multipart 仍是原始字符串，只会截断。
 - Redis `request.command` 是格式化后的展示字符串，除 `AUTH` 外不会重新解析；敏感值仍可能
   出现在其中。
-- `dblog` 完全绕过内容处理；bindings 会展开进 SQL，SQL 或查询结果可能包含敏感数据。
+- `dblog` 不执行脱敏；bindings 会展开进 SQL，SQL 或查询结果可能包含敏感数据，但仍受
+  `payload.max_bytes` 容量限制。
 - 异常消息中的任意文本不会根据内容猜测敏感值，仅按结构化字段名处理。
 
 需要更严格规则时，在宿主 `config/autoload/dependencies.php` 中替换处理器：
@@ -308,8 +322,40 @@ return [
 
 ## 日志格式
 
-`CustomizeJsonFormatter` 输出单行 JSON，并将采集器 context 平铺到顶层，方便日志平台
-直接按字段检索。以下字段由 Formatter 保留，业务 context 不能覆盖：
+`CustomizeJsonFormatter` 输出单行 JSON，并将采集器 context 平铺到顶层。四类采集器统一
+使用数值型 `duration_ms`；HTTP 请求正文固定为 `request.body`，非空响应固定为对象且正文
+位于 `response.body`。JSON 保留对象/数组结构，普通文本保留字符串。例如：
+
+```json
+{
+    "message_type": "apilog",
+    "request_id": "demo-trace-001",
+    "request": {
+        "method": "POST",
+        "url": "/users",
+        "headers": {},
+        "body": {
+            "name": "smile"
+        }
+    },
+    "response": {
+        "status_code": 200,
+        "headers": {},
+        "body": {
+            "code": 0
+        }
+    },
+    "exception": null,
+    "duration_ms": 12.35
+}
+```
+
+由于 `body` 会忠实保留 JSON、multipart 和文本的语义类型，如果日志集中写入
+Elasticsearch，同一索引中不应让同一路径混用对象和字符串。建议按 `message_type` 或
+HTTP 内容类型拆分索引，或在写入前通过 ingest pipeline 分流到 `body_json`、`body_text`
+等类型固定的字段。
+
+以下字段由 Formatter 保留，业务 context 不能覆盖：
 
 - `datetime`
 - `message_type`
@@ -325,7 +371,8 @@ return [
   日志可能来不及落盘。
 - 日志处理或写入失败不会中断业务。fallback 不复制 Header、Body 或 Query；SDK fallback
   额外保留 request ID、请求方法、移除 Query 和 Fragment 的 URL，以及异常摘要。
-- 开启 `sdklog.response_enabled` 或 `dblog.response_enabled` 会增加内存、序列化与存储开销。
+- 开启 `sdklog.response_enabled`、`redislog.response_enabled` 或
+  `dblog.response_enabled` 会增加内存、序列化与存储开销。
 - 已有同类 Listener、全局 Middleware 或 Guzzle Aspect 时，应关闭其中一套，避免重复日志
   和重复 Header 注入。
 - 修改配置或替换容器依赖后必须重启 Worker；Hyperf 长驻进程不会自动加载 PHP 配置变化。
@@ -337,10 +384,11 @@ return [
 确认 `logger.channels.apilog.enabled=true`、其 `handlers` 指向存在的 channel，并检查 HTTP
 server 的 `options.enable_request_lifecycle=true`。修改后需要重启 Worker。
 
-### 为什么没有 SDK 或数据库响应？
+### 为什么没有 SDK、Redis 或数据库响应？
 
 `logger.channels.sdklog.response_enabled` 和
-`logger.channels.dblog.response_enabled` 默认都是 `false`，需要分别显式开启。
+`logger.channels.redislog.response_enabled`、`logger.channels.dblog.response_enabled` 默认
+都是 `false`，需要分别显式开启。
 
 ### 为什么配置的 Guzzle 超时对 cURL Handler 没有效果？
 
