@@ -49,9 +49,8 @@ class LogWriter
     {
         // 在 HTTP/RPC 协程中将日志写入移到子协程，避免文件 IO 影响当前业务协程。
         if (Coroutine::inCoroutine()) {
-            // 子协程默认不继承 Context；先确保 ID 存在，再显式复制 trace 键，使
-            // Formatter 与 error_log fallback 都能写入父请求的同一 request-id。
-            $this->requestContext->id();
+            // 子协程默认不继承 Context；完整复制不可变 trace 值对象，使 Formatter 与
+            // error_log fallback 能读取同一 ID，同时不产生半初始化的上下文。
             Coroutine::fork(function () use ($type, $context): void {
                 try {
                     $this->write($type, $context);
@@ -60,7 +59,7 @@ class LogWriter
                     // 不复制上下文，避免把 Authorization 或请求 body 写入 stderr。
                     $this->reportFailure($type, $exception);
                 }
-            }, [$this->config->requestIdContextKey()]);
+            }, [RequestContext::CONTEXT_KEY]);
 
             return;
         }
@@ -104,7 +103,7 @@ class LogWriter
             'hyperf-log %s write failed: %s request_id=%s',
             $type,
             $exception::class,
-            $this->requestContext->id(),
+            $this->requestContext->id() ?? 'unavailable',
         ));
     }
 }

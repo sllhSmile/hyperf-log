@@ -181,11 +181,12 @@ class GuzzleLogAspect extends AbstractAspect
             // 请求开始时间总是由当前出站调用生成，用于精确计算 SDK 调用耗时。
             $request = $request->withHeader($this->config->requestStartHeader(), (string) microtime(true));
 
-            // 即使调用方传入其他值，也以当前 trace 为准，避免同一请求产生多套链路 ID。
-            $request = $request->withHeader(
-                $this->config->requestIdHeader(),
-                $this->requestContext->id(),
-            );
+            // 只透传入口已经建立的 trace。缺失时不在查询路径偷偷创建半套生命周期。
+            $requestId = $this->requestContext->id();
+            if ($requestId !== null) {
+                // 即使调用方传入其他值，也以当前 trace 为准，避免同一请求产生多套链路 ID。
+                $request = $request->withHeader($this->config->requestIdHeader(), $requestId);
+            }
 
             return $request;
         }), 'trace_log_request_headers');
@@ -265,7 +266,7 @@ class GuzzleLogAspect extends AbstractAspect
     private function reportLoggingFailure(
         Throwable $exception,
         RequestInterface $request,
-        string $requestId,
+        ?string $requestId,
         mixed $reason = null,
     ): void
     {
@@ -297,8 +298,8 @@ class GuzzleLogAspect extends AbstractAspect
     /**
      * 组织并写入 SDK 请求日志。
      *
-     * 仅对可回绕的请求/响应 Stream 获取完整快照，并恢复读取前的位置；不可回绕或读取
-     * 失败时 Body 记录为 null，确保日志旁路不会消费调用方随后还要读取的业务流。
+     * 对可回绕的 Stream 获取完整快照并恢复读取前的位置；Hyperf SwooleStream 可直接
+     * 安全读取；其他不可回绕或读取失败的 Stream 将 Body 记录为 null。
      *
      * @param RequestInterface $request 当前出站请求对象
      * @param float $startTime 请求开始时间戳

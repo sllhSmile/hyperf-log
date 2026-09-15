@@ -54,6 +54,64 @@ class PayloadProcessorTest extends TestCase
         self::assertArrayNotHasKey('payload_truncation', $result);
     }
 
+    public function testItRedactsSensitiveFieldsNestedBelowBusinessHeadersKey(): void
+    {
+        $result = $this->processor()->process('apilog', [
+            'request' => [
+                'headers' => ['Content-Type' => ['application/json']],
+                'body' => '{"headers":{"nested":{"token":"secret"}}}',
+            ],
+        ]);
+
+        self::assertSame('****', $result['request']['body']['headers']['nested']['token']);
+    }
+
+    public function testItOmitsMalformedExplicitJsonInsteadOfLoggingItUnredacted(): void
+    {
+        $result = $this->processor()->process('apilog', [
+            'request' => [
+                'headers' => ['Content-Type' => ['application/json']],
+                'body' => '{"password":"request-secret"',
+            ],
+            'response' => [
+                'headers' => ['Content-Type' => ['application/problem+json']],
+                'body' => '{"token":"response-secret"',
+            ],
+        ]);
+
+        self::assertNull($result['request']['body']);
+        self::assertNull($result['response']['body']);
+        self::assertSame(
+            ['reason' => 'invalid_json'],
+            $result['payload_omission']['request.body'],
+        );
+        self::assertSame(
+            ['reason' => 'invalid_json'],
+            $result['payload_omission']['response.body'],
+        );
+        self::assertStringNotContainsString('request-secret', json_encode($result, JSON_THROW_ON_ERROR));
+        self::assertStringNotContainsString('response-secret', json_encode($result, JSON_THROW_ON_ERROR));
+    }
+
+    public function testItUsesContentTypeBeforeHeadersAreRedacted(): void
+    {
+        $processor = $this->processor([
+            'sensitive_fields' => ['content-type', 'password'],
+            'redaction_value' => '****',
+            'max_bytes' => null,
+        ]);
+
+        $result = $processor->process('apilog', [
+            'request' => [
+                'headers' => ['Content-Type' => ['application/json']],
+                'body' => '{"password":"secret"}',
+            ],
+        ]);
+
+        self::assertSame(['****'], $result['request']['headers']['Content-Type']);
+        self::assertSame(['password' => '****'], $result['request']['body']);
+    }
+
     public function testItUsesConfiguredFieldsAndReplacement(): void
     {
         $processor = $this->processor([

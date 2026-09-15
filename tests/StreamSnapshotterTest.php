@@ -6,6 +6,7 @@ namespace Sllhsmile\HyperfLog\Tests;
 
 use GuzzleHttp\Psr7\NoSeekStream;
 use GuzzleHttp\Psr7\Utils;
+use Hyperf\HttpMessage\Stream\SwooleStream;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\StreamInterface;
 use Sllhsmile\HyperfLog\Support\StreamSnapshotter;
@@ -35,6 +36,29 @@ class StreamSnapshotterTest extends TestCase
         self::assertNull($snapshot->contents);
         self::assertFalse($snapshot->truncated);
         self::assertSame(2, $inner->tell());
+    }
+
+    public function testItReadsSwooleStreamWithoutConsumingIt(): void
+    {
+        $stream = new SwooleStream('abcdef');
+
+        $snapshot = (new StreamSnapshotter())->snapshot($stream, 6);
+
+        self::assertSame('abcdef', $snapshot->contents);
+        self::assertFalse($snapshot->truncated);
+        self::assertSame('abcdef', $stream->getContents());
+    }
+
+    public function testItOmitsOversizedSwooleStreamWithoutConsumingIt(): void
+    {
+        $stream = new SwooleStream(str_repeat('a', 65));
+
+        $snapshot = (new StreamSnapshotter())->snapshot($stream, 64);
+
+        self::assertNull($snapshot->contents);
+        self::assertTrue($snapshot->truncated);
+        self::assertSame(65, $snapshot->originalBytes);
+        self::assertSame(str_repeat('a', 65), $stream->getContents());
     }
 
     public function testItRestoresPositionWhenReadingFails(): void

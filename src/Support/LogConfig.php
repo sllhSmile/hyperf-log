@@ -105,27 +105,11 @@ class LogConfig
     }
 
     /**
-     * 获取 request-id 在协程上下文中的键名。
-     */
-    public function requestIdContextKey(): string
-    {
-        return (string) $this->config->get('trace_log.request_id_context_key', 'x-b3-traceid');
-    }
-
-    /**
      * 获取 Guzzle 出站请求开始时间 Header 名称。
      */
     public function requestStartHeader(): string
     {
         return (string) $this->config->get('trace_log.request_start_header', 'x-request-start-time');
-    }
-
-    /**
-     * 获取 HTTP 入站请求开始时间在协程上下文中的键名。
-     */
-    public function requestStartContextKey(): string
-    {
-        return (string) $this->config->get('trace_log.request_start_context_key', 'x_request_start_time');
     }
 
     /**

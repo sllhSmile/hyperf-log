@@ -148,7 +148,7 @@ class ApiLogListenerTest extends TestCase
         return new ApiLogListener(
             $config,
             $writer,
-            new RequestContext($config),
+            new RequestContext(),
             new StreamSnapshotter(),
         );
     }

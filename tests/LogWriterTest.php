@@ -36,7 +36,7 @@ class LogWriterTest extends TestCase
         $factory->expects(self::once())->method('get')->with('apilog', 'apilog')->willReturn($logger);
 
         $config = new LogConfig(new Config([]));
-        $writer = new LogWriter($factory, $config, new RequestContext($config), $processor);
+        $writer = new LogWriter($factory, $config, new RequestContext(), $processor);
 
         $writer->info('apilog', $original);
     }

@@ -10,8 +10,8 @@ declare(strict_types=1);
  * 宿主应用直接写入 config/autoload/logger.php 的 channels 内。
  *
  * HTTP 与命令行的 trace 上下文由公共包自动初始化。RPC 组件的 middleware 接口因
- * json-rpc、grpc 等实现不同而不同，请在具体 RPC middleware 的最前面调用
- * RequestContext::initializeTrace()；该方法不依赖 HTTP 请求对象。
+ * json-rpc、grpc 等实现不同而不同，请在每个独立处理单元的入口调用
+ * RequestContext::start()；该方法不依赖 HTTP 请求对象，并会重置上一条 trace。
  *
  * dblog.response_enabled、redislog.response_enabled 和 sdklog.response_enabled 位于
  * 宿主 logger.php 的同名 channel 内，默认建议 false；开启后分别记录对应执行结果或响应体。
@@ -19,12 +19,8 @@ declare(strict_types=1);
 return [
     // 入站请求与 Guzzle 出站请求共用的 request-id Header 名称。
     'request_id_header' => 'x-b3-traceid',
-    // request-id 在当前协程上下文中的存储键。
-    'request_id_context_key' => 'x-b3-traceid',
     // Guzzle 出站请求开始时间 Header 名称，用于计算 SDK 调用耗时。
     'request_start_header' => 'x-request-start-time',
-    // HTTP 入站请求开始时间在当前协程上下文中的存储键。
-    'request_start_context_key' => 'x-request-start-time',
     // 可选的 Guzzle 公共默认值。未声明 timeout/connect_timeout 时保留 Guzzle 自身默认行为。
     'guzzle' => [
         // 'timeout' => 10,

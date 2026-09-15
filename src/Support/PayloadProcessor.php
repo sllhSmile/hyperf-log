@@ -28,14 +28,20 @@ class PayloadProcessor implements PayloadProcessorInterface
         if ($type !== 'dblog') {
             $fields = array_fill_keys(array_map('strtolower', $this->config->payloadSensitiveFields()), true);
             $replacement = $this->config->payloadRedactionValue();
+            $requestContentType = is_array($context['request'] ?? null)
+                ? $this->contentType($context['request'])
+                : '';
+            $responseContentType = is_array($context['response'] ?? null)
+                ? $this->contentType($context['response'])
+                : '';
 
             // 先递归处理已结构化的 Header、multipart 字段及响应数组。
             $context = $this->redactArray($context, $fields, $replacement);
             // 只有 HTTP 采集器才按 Content-Type 解释字符串 Body；Redis 字符串结果即使
             // 内容恰好是 JSON，也仍应保留 Redis 返回的字符串类型。
             if (in_array($type, ['apilog', 'sdklog'], true)) {
-                $this->redactRequest($context, $fields, $replacement);
-                $this->redactResponse($context, $fields, $replacement);
+                $this->redactRequest($context, $fields, $replacement, $requestContentType);
+                $this->redactResponse($context, $fields, $replacement, $responseContentType);
             }
         }
 
@@ -91,6 +97,9 @@ class PayloadProcessor implements PayloadProcessorInterface
     {
         foreach ($headers as $name => $value) {
             if (! isset($fields[strtolower((string) $name)])) {
+                if (is_array($value)) {
+                    $headers[$name] = $this->redactArray($value, $fields, $replacement);
+                }
                 continue;
             }
 
@@ -111,8 +120,12 @@ class PayloadProcessor implements PayloadProcessorInterface
      * @param array<string, mixed> $context
      * @param array<string, true> $fields
      */
-    private function redactRequest(array &$context, array $fields, string $replacement): void
-    {
+    private function redactRequest(
+        array &$context,
+        array $fields,
+        string $replacement,
+        string $contentType,
+    ): void {
         if (! isset($context['request']) || ! is_array($context['request'])) {
             return;
         }
@@ -126,7 +139,7 @@ class PayloadProcessor implements PayloadProcessorInterface
             return;
         }
 
-        if ($this->shouldDecodeJson($request)) {
+        if ($this->shouldDecodeJson($contentType)) {
             $decoded = json_decode($request['body'], true);
             if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
                 // JSON 对象和数组保留结构，避免 Formatter 再次转义为 JSON 字符串。
@@ -134,9 +147,17 @@ class PayloadProcessor implements PayloadProcessorInterface
 
                 return;
             }
+
+            if (json_last_error() !== JSON_ERROR_NONE && $this->isJsonContentType($contentType)) {
+                // 显式声明为 JSON 却无法解析时不能原样记录，否则敏感字段会绕过结构化脱敏。
+                $request['body'] = null;
+                $context['payload_omission']['request.body'] = ['reason' => 'invalid_json'];
+
+                return;
+            }
         }
 
-        if ($fields !== [] && $this->contentType($request) === 'application/x-www-form-urlencoded') {
+        if ($fields !== [] && $contentType === 'application/x-www-form-urlencoded') {
             $request['body'] = $this->redactQueryString($request['body'], $fields, $replacement);
         }
 
@@ -150,10 +171,14 @@ class PayloadProcessor implements PayloadProcessorInterface
      * @param array<string, mixed> $context
      * @param array<string, true> $fields
      */
-    private function redactResponse(array &$context, array $fields, string $replacement): void
-    {
+    private function redactResponse(
+        array &$context,
+        array $fields,
+        string $replacement,
+        string $contentType,
+    ): void {
         $response = $context['response'] ?? null;
-        if (! is_array($response) || ! $this->shouldDecodeJson($response)) {
+        if (! is_array($response)) {
             return;
         }
 
@@ -162,8 +187,22 @@ class PayloadProcessor implements PayloadProcessorInterface
             return;
         }
 
+        if (! $this->shouldDecodeJson($contentType)) {
+            return;
+        }
+
         $decoded = json_decode($body, true);
-        if (json_last_error() !== JSON_ERROR_NONE || ! is_array($decoded)) {
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            if ($this->isJsonContentType($contentType)) {
+                // 响应同样采用失败关闭策略，避免第三方返回的畸形 JSON 泄露敏感字段。
+                $context['response']['body'] = null;
+                $context['payload_omission']['response.body'] = ['reason' => 'invalid_json'];
+            }
+
+            return;
+        }
+
+        if (! is_array($decoded)) {
             return;
         }
 
@@ -197,16 +236,16 @@ class PayloadProcessor implements PayloadProcessorInterface
 
     /**
      * Header 缺失时兼容按内容识别 JSON；显式声明其他媒体类型时尊重发送方格式。
-     *
-     * @param array<string, mixed> $message
      */
-    private function shouldDecodeJson(array $message): bool
+    private function shouldDecodeJson(string $contentType): bool
     {
-        $contentType = $this->contentType($message);
-
         return $contentType === ''
-            || $contentType === 'application/json'
-            || str_ends_with($contentType, '+json');
+            || $this->isJsonContentType($contentType);
+    }
+
+    private function isJsonContentType(string $contentType): bool
+    {
+        return $contentType === 'application/json' || str_ends_with($contentType, '+json');
     }
 
     /**

@@ -69,7 +69,7 @@ class RedisLogListenerTest extends TestCase
             ]]],
         ]));
 
-        return new RedisLogListener($config, $writer, new RequestContext($config));
+        return new RedisLogListener($config, $writer, new RequestContext());
     }
 
     /**

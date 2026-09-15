@@ -40,7 +40,6 @@ class LogConfigTest extends TestCase
         self::assertFalse($config->anyEnabled());
         self::assertFalse($config->enabled('dblog'));
         self::assertSame('x-b3-traceid', $config->requestIdHeader());
-        self::assertSame('x-b3-traceid', $config->requestIdContextKey());
     }
 
     /**

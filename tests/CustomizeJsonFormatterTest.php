@@ -17,7 +17,7 @@ class CustomizeJsonFormatterTest extends TestCase
 {
     protected function tearDown(): void
     {
-        Context::destroy('x-b3-traceid');
+        Context::destroy(RequestContext::CONTEXT_KEY);
     }
 
     public function testItFlattensCollectorContextWithoutOverridingMetadata(): void
@@ -32,7 +32,7 @@ class CustomizeJsonFormatterTest extends TestCase
         $output = json_decode($formatter->format($record), true, flags: JSON_THROW_ON_ERROR);
 
         self::assertSame('sdklog', $output['message_type']);
-        self::assertNotSame('must-not-override', $output['request_id']);
+        self::assertSame('formatter-trace', $output['request_id']);
         self::assertSame(['url' => 'https://example.com'], $output['request']);
     }
 
@@ -45,8 +45,22 @@ class CustomizeJsonFormatterTest extends TestCase
 
         self::assertSame('demo_log', $output['message_type']);
         self::assertSame('payment complete', $output['message']);
-        self::assertNotSame('', $output['request_id']);
+        self::assertSame('formatter-trace', $output['request_id']);
         self::assertArrayHasKey('coroutine_id', $output);
+    }
+
+    public function testFormattingDoesNotImplicitlyStartTrace(): void
+    {
+        $config = new LogConfig(new Config(['app_name' => 'demo']));
+        $context = new RequestContext();
+        $formatter = new CustomizeJsonFormatter($context, $config);
+        $record = new LogRecord(new \DateTimeImmutable(), 'default', Level::Info, 'message');
+
+        $output = json_decode($formatter->format($record), true, flags: JSON_THROW_ON_ERROR);
+
+        self::assertNull($output['request_id']);
+        self::assertNull($context->current());
+        self::assertFalse(Context::has(RequestContext::CONTEXT_KEY));
     }
 
     public function testItWritesStructuredJsonBodyWithoutDoubleEncoding(): void
@@ -67,7 +81,9 @@ class CustomizeJsonFormatterTest extends TestCase
     private function formatter(string $appName): CustomizeJsonFormatter
     {
         $config = new LogConfig(new Config(['app_name' => $appName]));
+        $context = new RequestContext();
+        $context->start('formatter-trace');
 
-        return new CustomizeJsonFormatter(new RequestContext($config), $config);
+        return new CustomizeJsonFormatter($context, $config);
     }
 }

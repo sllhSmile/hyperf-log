@@ -4,15 +4,17 @@ declare(strict_types=1);
 
 namespace Sllhsmile\HyperfLog\Support;
 
+use Hyperf\HttpMessage\Stream\SwooleStream;
 use Psr\Http\Message\StreamInterface;
 use Throwable;
 
 /**
  * 在不改变 PSR-7 Stream 可观察状态的前提下获取日志快照。
  *
- * 日志属于旁路能力，不能为了读取 Body 消耗不可回绕的业务流。只有 Stream 明确支持
- * seek 时才从头读取，并在结束后恢复调用前的位置。配置容量上限后最多读取上限加一个
- * 字节；超限内容不保留不完整预览，避免截断后的 JSON 无法脱敏却仍写入敏感片段。
+ * 日志属于旁路能力，不能为了读取 Body 消耗不可回绕的业务流。支持 seek 的 Stream 会
+ * 从头读取并恢复调用前的位置；Hyperf SwooleStream 的 getContents() 不会消费内容，也可
+ * 直接安全读取。配置容量上限后，已知大小的流会在读取前检查，其余流最多读取上限加一
+ * 个字节；超限内容不保留不完整预览，避免截断后的 JSON 无法脱敏却仍写入敏感片段。
  */
 final class StreamSnapshotter
 {
@@ -27,19 +29,28 @@ final class StreamSnapshotter
 
         try {
             if (! $stream->isSeekable()) {
-                return new StreamSnapshot(null);
-            }
+                if (! $stream instanceof SwooleStream) {
+                    return new StreamSnapshot(null);
+                }
 
-            $position = $stream->tell();
-            $size = $stream->getSize();
-            if ($maxBytes !== null && $size !== null && $size > $maxBytes) {
-                return new StreamSnapshot(null, true, $size);
-            }
+                $size = $stream->getSize();
+                if ($maxBytes !== null && $size !== null && $size > $maxBytes) {
+                    return new StreamSnapshot(null, true, $size);
+                }
 
-            $stream->rewind();
-            $contents = $maxBytes === null
-                ? $stream->getContents()
-                : $this->readUpTo($stream, $maxBytes + 1);
+                $contents = $stream->getContents();
+            } else {
+                $position = $stream->tell();
+                $size = $stream->getSize();
+                if ($maxBytes !== null && $size !== null && $size > $maxBytes) {
+                    return new StreamSnapshot(null, true, $size);
+                }
+
+                $stream->rewind();
+                $contents = $maxBytes === null
+                    ? $stream->getContents()
+                    : $this->readUpTo($stream, $maxBytes + 1);
+            }
         } catch (Throwable) {
             // 读取失败仍会在下方尝试恢复已经取得的原始位置。
         }

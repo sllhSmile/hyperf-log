@@ -36,7 +36,7 @@ class DatabaseLogListenerTest extends TestCase
         $config = new LogConfig(new Config([
             'logger' => ['channels' => ['dblog' => ['enabled' => true, 'response_enabled' => true]]],
         ]));
-        $listener = new DatabaseLogListener($config, $writer, new RequestContext($config));
+        $listener = new DatabaseLogListener($config, $writer, new RequestContext());
         $event = new \Hyperf\Database\Events\QueryExecuted('select 1', [], 2.5, $connection, [['id' => 1]]);
 
         $listener->process($event);
@@ -54,7 +54,7 @@ class DatabaseLogListenerTest extends TestCase
         $listener = new DatabaseLogListener(
             $config,
             $this->createMock(LogWriter::class),
-            new RequestContext($config),
+            new RequestContext(),
         );
         $method = new \ReflectionMethod($listener, 'interpolateSql');
 

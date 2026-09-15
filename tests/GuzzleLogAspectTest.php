@@ -40,7 +40,7 @@ class GuzzleLogAspectTest extends TestCase
             'logger' => ['channels' => ['sdklog' => ['enabled' => true]]],
             'trace_log' => ['guzzle' => []],
         ]));
-        $aspect = new GuzzleLogAspect($config, $writer, new RequestContext($config));
+        $aspect = new GuzzleLogAspect($config, $writer, new RequestContext());
         $method = new \ReflectionMethod($aspect, 'logMiddleware');
         $middleware = $method->invoke($aspect);
 
@@ -76,7 +76,7 @@ class GuzzleLogAspectTest extends TestCase
         $aspect = new GuzzleLogAspect(
             $config,
             $writer,
-            new RequestContext($config),
+            new RequestContext(),
             new StreamSnapshotter(),
         );
         $method = new \ReflectionMethod($aspect, 'logMiddleware');
@@ -112,7 +112,7 @@ class GuzzleLogAspectTest extends TestCase
         $aspect = new GuzzleLogAspect(
             $config,
             $writer,
-            new RequestContext($config),
+            new RequestContext(),
             new StreamSnapshotter(),
         );
         $method = new \ReflectionMethod($aspect, 'logMiddleware');
@@ -144,7 +144,7 @@ class GuzzleLogAspectTest extends TestCase
             'logger' => ['channels' => ['sdklog' => ['enabled' => true]]],
             'trace_log' => ['guzzle' => []],
         ]));
-        $aspect = new GuzzleLogAspect($config, $writer, new RequestContext($config));
+        $aspect = new GuzzleLogAspect($config, $writer, new RequestContext());
         $method = new \ReflectionMethod($aspect, 'logMiddleware');
         $middleware = $method->invoke($aspect);
         $exception = new \RuntimeException('connection failed');
@@ -168,7 +168,7 @@ class GuzzleLogAspectTest extends TestCase
             'logger' => ['channels' => ['sdklog' => ['enabled' => true]]],
             'trace_log' => ['guzzle' => []],
         ]));
-        $aspect = new GuzzleLogAspect($config, $writer, new RequestContext($config));
+        $aspect = new GuzzleLogAspect($config, $writer, new RequestContext());
         $method = new \ReflectionMethod($aspect, 'logMiddleware');
         $middleware = $method->invoke($aspect);
 
@@ -193,7 +193,7 @@ class GuzzleLogAspectTest extends TestCase
         $config = new LogConfig(new Config([
             'logger' => ['channels' => ['sdklog' => ['enabled' => true]]],
         ]));
-        $aspect = new GuzzleLogAspect($config, $writer, new RequestContext($config));
+        $aspect = new GuzzleLogAspect($config, $writer, new RequestContext());
         $method = new \ReflectionMethod($aspect, 'logMiddleware');
         $middleware = $method->invoke($aspect);
         $handler = $middleware(static function () use ($exception): never {
@@ -212,7 +212,7 @@ class GuzzleLogAspectTest extends TestCase
         $aspect = new GuzzleLogAspect(
             $config,
             $this->createMock(LogWriter::class),
-            new RequestContext($config),
+            new RequestContext(),
         );
         $joinPoint = $this->createMock(ProceedingJoinPoint::class);
         $joinPoint->expects(self::once())->method('process')->willReturn(null);
@@ -229,7 +229,7 @@ class GuzzleLogAspectTest extends TestCase
         $config = new LogConfig(new Config([
             'logger' => ['channels' => ['sdklog' => ['enabled' => true]]],
         ]));
-        $aspect = new GuzzleLogAspect($config, $writer, new RequestContext($config));
+        $aspect = new GuzzleLogAspect($config, $writer, new RequestContext());
         $stack = HandlerStack::create(static fn () => Create::promiseFor(new Response()));
 
         foreach ([new Client(['handler' => $stack]), new Client(['handler' => $stack])] as $client) {
@@ -254,8 +254,8 @@ class GuzzleLogAspectTest extends TestCase
             'logger' => ['channels' => ['sdklog' => ['enabled' => true]]],
             'trace_log' => ['guzzle' => []],
         ]));
-        $requestContext = new RequestContext($config);
-        $requestContext->initializeTrace('context-123');
+        $requestContext = new RequestContext();
+        $requestContext->start('context-123');
         $aspect = new GuzzleLogAspect($config, $writer, $requestContext);
         $method = new \ReflectionMethod($aspect, 'logMiddleware');
         $middleware = $method->invoke($aspect);
@@ -291,7 +291,7 @@ class GuzzleLogAspectTest extends TestCase
             self::assertStringNotContainsString('query-secret', $fallbackLog);
         } finally {
             ini_set('error_log', $previousErrorLog === false ? '' : $previousErrorLog);
-            Context::destroy('x-b3-traceid');
+            Context::destroy(RequestContext::CONTEXT_KEY);
             unlink($errorLog);
         }
     }
@@ -414,7 +414,7 @@ class GuzzleLogAspectTest extends TestCase
         $aspect = new GuzzleLogAspect(
             $config,
             (new \ReflectionClass(LogWriter::class))->newInstanceWithoutConstructor(),
-            new RequestContext($config),
+            new RequestContext(),
         );
         $method = new \ReflectionMethod($aspect, 'pushTimeoutMiddleware');
         $method->invoke($aspect, $stack);

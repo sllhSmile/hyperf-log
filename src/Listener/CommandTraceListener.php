@@ -51,6 +51,6 @@ class CommandTraceListener implements ListenerInterface
         }
 
         // 第 2 步：CLI 不经过 HTTP Middleware，因此在当前命令上下文生成 request-id 和开始时间。
-        $this->requestContext->initializeTrace();
+        $this->requestContext->start();
     }
 }

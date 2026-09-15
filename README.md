@@ -200,11 +200,15 @@ Header，本包会生成 UUID v7，并将最终值写回响应 Header。
 默认使用 `x-b3-traceid`：
 
 - HTTP：保留有效的入站 Header；缺失或为空时生成 UUID v7，并写入请求上下文和响应。
-- Guzzle：所有出站请求都覆盖为当前 `RequestContext` 的 ID，保证同一请求内只有一个 ID。
+- Guzzle：存在当前 trace 时，所有出站请求都覆盖为该 trace 的 ID，保证同一请求内只有一个 ID。
 - CLI：`BeforeHandle` 监听器会在命令开始前自动初始化 ID。
-- RPC 或后台协程：在入口注入 `RequestContext`，调用 `initializeTrace()`；有上游 ID 时将其
-  作为参数传入。
+- RPC 或后台任务：在每个独立处理单元的入口注入 `RequestContext`，调用
+  `start()`；有上游 ID 时将其作为参数传入。该方法会以一个不可变值对象同时覆盖当前
+  Context 中上一条 trace 的 ID 和开始时间，适用于复用协程的长驻消费者。
 
+`start()` 是唯一生成入口，`current()` 是完整值对象的查询入口；`id()` 和 `startTime()`
+分别提供便捷的字段查询。三个查询方法均无副作用，未初始化时返回 `null`，不会在日志
+格式化或 Guzzle 请求过程中隐式生成半套上下文。
 业务代码需要读取当前 ID 时，可以直接注入公共服务：
 
 ```php
@@ -222,15 +226,15 @@ final class CurrentTrace
     {
     }
 
-    public function id(): string
+    public function id(): ?string
     {
         return $this->context->id();
     }
 }
 ```
 
-Header 名称和 Context 键可以在 `trace_log.php` 中分别修改。除非需要兼容已有链路规范，
-建议保持二者一致。
+Header 名称可以在 `trace_log.php` 中修改；内部 Context 键固定使用 `RequestContext::class`，
+无需配置，也不应由业务代码直接读写。
 
 ## Guzzle 超时
 
@@ -291,13 +295,17 @@ encoded 表单保持字符串，multipart 普通字段保持数组。上传文�
 }
 ```
 
+显式声明为 `application/json` 或 `application/*+json` 的正文如果无法解析，也会采用失败
+关闭策略：`body` 设为 `null`，并在 `payload_omission.<path>.reason` 中记录
+`invalid_json`，避免畸形 JSON 绕过字段脱敏后原样写入日志。
+
 设置 `payload.sensitive_fields=[]` 会关闭通用字段脱敏；Redis `AUTH` 参数仍会强制遮蔽。
 设置 `payload.max_bytes=null` 会关闭截断。
 
 当前保护边界必须在生产使用前确认：
 
-- 为避免日志采集消费业务流，不可回绕或读取前已确认超限的 PSR-7 Stream 不读取 Body，
-  对应 `body` 为 `null`。
+- 为避免日志采集消费业务流，除 Hyperf `SwooleStream` 这类已知可安全读取的内存流外，
+  不可回绕或读取前已确认超限的 PSR-7 Stream 不读取 Body，对应 `body` 为 `null`。
 - `apilog` 会使用 ServerRequest 已解析的 multipart 字段并进行脱敏，不记录原始 Body；
   `sdklog` 的出站 multipart 仍是原始字符串，只会截断。
 - Redis `request.command` 是格式化后的展示字符串，除 `AUTH` 外不会重新解析；敏感值仍可能
