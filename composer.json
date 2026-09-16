@@ -26,11 +26,13 @@
         "guzzlehttp/guzzle": "^7.0",
         "hyperf/command": "^3.2",
         "hyperf/context": "^3.2",
+        "hyperf/contract": "^3.2",
         "hyperf/coroutine": "^3.2",
         "hyperf/database": "^3.2",
         "hyperf/di": "^3.2",
         "hyperf/event": "^3.2",
         "hyperf/guzzle": "^3.2",
+        "hyperf/http-message": "^3.2",
         "hyperf/http-server": "^3.2",
         "hyperf/logger": "^3.2",
         "hyperf/redis": "^3.2",
@@ -47,7 +49,9 @@
         }
     },
     "require-dev": {
+        "friendsofphp/php-cs-fixer": "^3.89",
         "hyperf/config": "^3.2",
+        "phpstan/phpstan": "^2.1",
         "phpunit/phpunit": "^11.0"
     },
     "minimum-stability": "dev",
@@ -56,7 +60,15 @@
         "sort-packages": true
     },
     "scripts": {
-        "test": "phpunit -c phpunit.xml --colors=always"
+        "analyse": "phpstan analyse --memory-limit=-1",
+        "cs": "php-cs-fixer fix --dry-run --diff",
+        "cs:fix": "php-cs-fixer fix",
+        "test": "phpunit -c phpunit.xml --colors=always",
+        "check": [
+            "@test",
+            "@analyse",
+            "@cs"
+        ]
     },
     "extra": {
         "hyperf": {

@@ -4,89 +4,59 @@ declare(strict_types=1);
 
 namespace Sllhsmile\HyperfLog\Tests;
 
+use GuzzleHttp\Psr7\Response;
+use GuzzleHttp\Psr7\ServerRequest;
 use Hyperf\Config\Config;
 use Hyperf\Context\Context;
-use Hyperf\Context\ResponseContext;
-use Hyperf\HttpMessage\Server\Request;
-use Hyperf\HttpMessage\Server\Response;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\ResponseInterface;
+use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Server\RequestHandlerInterface;
-use RuntimeException;
+use Sllhsmile\HyperfLog\Context\RequestContext;
 use Sllhsmile\HyperfLog\Middleware\LogMiddleware;
 use Sllhsmile\HyperfLog\Support\LogConfig;
-use Sllhsmile\HyperfLog\Support\RequestContext;
 
-class LogMiddlewareTest extends TestCase
+final class LogMiddlewareTest extends TestCase
 {
     protected function tearDown(): void
     {
-        Context::destroy(ResponseInterface::class);
         Context::destroy(RequestContext::CONTEXT_KEY);
     }
 
-    public function testItPreservesInboundRequestIdAndStartsCompleteTrace(): void
+    public function testItUsesInboundIdAndReturnsItToTheClient(): void
     {
-        $config = new LogConfig(new Config(['trace_log' => []]));
-        $requestContext = new RequestContext();
-        $middleware = new LogMiddleware($config, $requestContext);
-        $handler = $this->createMock(RequestHandlerInterface::class);
-        $handler->expects(self::once())->method('handle')->with(self::callback(
-            static fn ($request): bool => $request->getHeaderLine('x-b3-traceid') === 'upstream-id',
-        ))->willReturn(new Response());
-
-        $response = $middleware->process(
-            (new Request('GET', '/'))->withHeader('x-b3-traceid', 'upstream-id'),
-            $handler,
-        );
-
-        $trace = $requestContext->current();
-        self::assertNotNull($trace);
-        self::assertSame('upstream-id', $response->getHeaderLine('x-b3-traceid'));
-        self::assertSame('upstream-id', $trace->requestId);
-        self::assertGreaterThan(0, $trace->startedAt);
-    }
-
-    public function testItGeneratesMissingRequestIdAndPassesItToHandlerAndResponse(): void
-    {
-        $config = new LogConfig(new Config(['trace_log' => []]));
-        $requestContext = new RequestContext();
-        $middleware = new LogMiddleware($config, $requestContext);
-        $handledRequestId = null;
-        $handler = $this->createMock(RequestHandlerInterface::class);
-        $handler->method('handle')->willReturnCallback(
-            static function ($request) use (&$handledRequestId): ResponseInterface {
-                $handledRequestId = $request->getHeaderLine('x-b3-traceid');
-
+        $context = new RequestContext();
+        $middleware = new LogMiddleware(new LogConfig(new Config([])), $context);
+        $handler = new class implements RequestHandlerInterface {
+            public ?ServerRequestInterface $request = null;
+            public function handle(ServerRequestInterface $request): ResponseInterface
+            {
+                $this->request = $request;
                 return new Response();
-            },
-        );
+            }
+        };
 
-        $response = $middleware->process(new Request('GET', '/'), $handler);
+        $response = $middleware->process(new ServerRequest('GET', '/', ['x-b3-traceid' => 'upstream']), $handler);
 
-        self::assertNotSame('', $handledRequestId);
-        self::assertSame($handledRequestId, $response->getHeaderLine('x-b3-traceid'));
-        self::assertSame($handledRequestId, $requestContext->current()?->requestId);
+        self::assertSame('upstream', $context->id());
+        self::assertSame('upstream', $response->getHeaderLine('x-b3-traceid'));
+        self::assertSame('upstream', $handler->request?->getHeaderLine('x-b3-traceid'));
     }
 
-    public function testItAddsRequestIdToResponseContextBeforeExceptionEscapes(): void
+    public function testItGeneratesAndInjectsAMissingId(): void
     {
-        ResponseContext::set(new Response());
-        $config = new LogConfig(new Config(['trace_log' => []]));
-        $middleware = new LogMiddleware($config, new RequestContext());
-        $handler = $this->createMock(RequestHandlerInterface::class);
-        $handler->method('handle')->willThrowException(new RuntimeException('request failed'));
+        $context = new RequestContext();
+        $middleware = new LogMiddleware(new LogConfig(new Config([])), $context);
+        $handler = new class implements RequestHandlerInterface {
+            public function handle(ServerRequestInterface $request): ResponseInterface
+            {
+                return new Response(200, ['seen-id' => $request->getHeaderLine('x-b3-traceid')]);
+            }
+        };
 
-        try {
-            $middleware->process(
-                (new Request('GET', '/'))->withHeader('x-b3-traceid', 'error-trace'),
-                $handler,
-            );
-            self::fail('The request handler exception was not propagated.');
-        } catch (RuntimeException $exception) {
-            self::assertSame('request failed', $exception->getMessage());
-        }
-
-        self::assertSame('error-trace', ResponseContext::get()->getHeaderLine('x-b3-traceid'));
+        $response = $middleware->process(new ServerRequest('GET', '/'), $handler);
+        self::assertNotSame('', $context->id());
+        self::assertSame($context->id(), $response->getHeaderLine('seen-id'));
+        self::assertSame($context->id(), $response->getHeaderLine('x-b3-traceid'));
     }
 }

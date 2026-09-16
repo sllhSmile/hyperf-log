@@ -2,52 +2,27 @@
 
 declare(strict_types=1);
 
-/**
- * Trace Log 公共包的共享请求链路和 Guzzle 配置。
- *
- * 发布后文件位于 config/autoload/trace_log.php，对应的配置根为 trace_log。
- * redislog、sdklog、apilog、dblog 的 handler、formatter 及 enabled 开关仍应由
- * 宿主应用直接写入 config/autoload/logger.php 的 channels 内。
- *
- * HTTP 与命令行的 trace 上下文由公共包自动初始化。RPC 组件的 middleware 接口因
- * json-rpc、grpc 等实现不同而不同，请在每个独立处理单元的入口调用
- * RequestContext::start()；该方法不依赖 HTTP 请求对象，并会重置上一条 trace。
- *
- * dblog.response_enabled、redislog.response_enabled 和 sdklog.response_enabled 位于
- * 宿主 logger.php 的同名 channel 内，默认建议 false；开启后分别记录对应执行结果或响应体。
- */
 return [
-    // 入站请求与 Guzzle 出站请求共用的 request-id Header 名称。
+    // HTTP 入站请求、响应与 Guzzle 出站请求共用的 request-id Header 名称。
     'request_id_header' => 'x-b3-traceid',
-    // Guzzle 出站请求开始时间 Header 名称，用于计算 SDK 调用耗时。
-    'request_start_header' => 'x-request-start-time',
-    // 可选的 Guzzle 公共默认值。未声明 timeout/connect_timeout 时保留 Guzzle 自身默认行为。
-    'guzzle' => [
-        // 'timeout' => 10,
-        // 'connect_timeout' => 10,
+    // null 跟随 logger.default；也可填写 logger.channels 中已有的 channel 名称。
+    'logger_channel' => null,
+    // 采集器默认关闭；response_enabled=false 时不会读取或输出对应响应/结果。
+    'collectors' => [
+        'api' => ['enabled' => false, 'response_enabled' => true],
+        'sdk' => ['enabled' => false, 'response_enabled' => false],
+        'database' => ['enabled' => false, 'response_enabled' => false],
+        'redis' => ['enabled' => false, 'response_enabled' => false],
     ],
-    // API/Guzzle 按字段脱敏，Redis AUTH 强制遮蔽；四类采集器均执行容量限制。
     'payload' => [
-        // 按 Header、Query、JSON 和已解析表单字段名匹配；空数组表示关闭通用字段脱敏。
+        // Header、URL query、JSON 和表单字段均按名称递归匹配，不区分大小写。
         'sensitive_fields' => [
-            'authorization',
-            'proxy-authorization',
-            'cookie',
-            'set-cookie',
-            'x-api-key',
-            'password',
-            'passwd',
-            'token',
-            'access_token',
-            'refresh_token',
-            'api_key',
-            'api-key',
-            'secret',
-            'client_secret',
+            'authorization', 'proxy-authorization', 'cookie', 'set-cookie', 'x-api-key',
+            'password', 'passwd', 'token', 'access_token', 'refresh_token', 'api_key',
+            'api-key', 'secret', 'client_secret',
         ],
-        // 敏感字段被替换后的日志内容。
         'redaction_value' => '****',
-        // 单个请求体、响应体、完整 Redis 命令或结果最大记录 64 KB；null 表示不截断。
+        // 单个大字段的字节上限；字符串截断、结构化值省略，null 表示不限制。
         'max_bytes' => 64 * 1024,
     ],
 ];

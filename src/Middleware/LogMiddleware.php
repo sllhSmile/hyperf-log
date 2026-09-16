@@ -9,8 +9,8 @@ use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Server\MiddlewareInterface;
 use Psr\Http\Server\RequestHandlerInterface;
+use Sllhsmile\HyperfLog\Context\RequestContext;
 use Sllhsmile\HyperfLog\Support\LogConfig;
-use Sllhsmile\HyperfLog\Support\RequestContext;
 
 /**
  * HTTP 全局 trace 中间件。
@@ -19,15 +19,9 @@ use Sllhsmile\HyperfLog\Support\RequestContext;
  * 全部路由。RPC 和 CLI 不会经过 PSR-15 HTTP 中间件：CLI 由 CommandTraceListener
  * 处理，RPC 需要在所使用 RPC 组件的 middleware 中调用 RequestContext::start()。
  */
-class LogMiddleware implements MiddlewareInterface
+final class LogMiddleware implements MiddlewareInterface
 {
-    /**
-     * @param LogConfig $config 用于判断采集器开关的配置读取器
-     * @param RequestContext $requestContext 用于创建并保存请求链路数据的上下文服务
-     */
-    public function __construct(private LogConfig $config, private RequestContext $requestContext)
-    {
-    }
+    public function __construct(private readonly LogConfig $config, private readonly RequestContext $requestContext) {}
 
     public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface
     {

@@ -5,77 +5,28 @@
 [![Hyperf](https://img.shields.io/badge/Hyperf-%5E3.2-0E8A16)](https://hyperf.io/)
 [![License](https://img.shields.io/badge/license-MIT-22C55E)](LICENSE)
 
-为 Hyperf 应用统一记录 HTTP API、数据库、Redis 和 Guzzle 调用日志，并用同一个
-request ID 串联一次请求中的业务日志与下游调用。
+为 Hyperf 应用统一记录 HTTP API、数据库、Redis 和 Guzzle 日志，并用同一个 request ID 串联请求、业务日志与下游调用。
 
-安装后可按采集器独立启用日志；HTTP、CLI 和 Guzzle 的链路上下文由包自动维护，RPC
-入口也可以显式初始化。结构化日志默认在独立子协程中完成脱敏、容量限制和写入，尽量
-减少日志处理对业务协程的影响。
-
-> 本包提供的是应用日志与 request ID 关联能力，不生成 tracing span 或 metrics，也不
-> 保证进程异常退出前所有异步日志都已落盘，因此不应作为支付、审计等零丢失日志方案。
-
-## 目录
-
-- [核心能力](#核心能力)
-- [兼容性](#兼容性)
-- [安装](#安装)
-- [五分钟完成首次记录](#五分钟完成首次记录)
-- [选择需要的日志](#选择需要的日志)
-- [request ID 与运行环境](#request-id-与运行环境)
-- [Guzzle 超时](#guzzle-超时)
-- [脱敏与容量限制](#脱敏与容量限制)
-- [生产注意事项](#生产注意事项)
-- [常见问题](#常见问题)
-
-## 核心能力
-
-| 能力 | 行为 |
-| --- | --- |
-| `apilog` | 记录 HTTP 请求、响应状态、响应 Header、异常和耗时 |
-| `dblog` | 记录数据库连接、展开 bindings 后的 SQL、可选执行结果和耗时 |
-| `redislog` | 记录参数已展开的 Redis 完整命令、可选执行结果、异常和耗时 |
-| `sdklog` | 记录 Guzzle 请求、可选响应状态、响应 Header、异常和耗时 |
-| request ID | 接收入站 ID 或生成 UUID v7，并写入响应和 Guzzle 出站 Header |
-| 内容保护 | API/Guzzle 按字段脱敏，Redis `AUTH` 强制遮蔽，四类日志统一限制负载容量 |
-| 异步写入 | HTTP/RPC 协程中使用日志子协程；CLI 中同步写入 |
-
-所有采集器默认关闭。启用哪些日志、写入哪个文件，完全由宿主应用的
-`config/autoload/logger.php` 决定。
+本包不是完整的分布式追踪系统，不生成 span 或 metrics；异步采集日志也不适合作为零丢失的审计日志。
 
 ## 兼容性
 
-| hyperf-log | PHP | Hyperf 组件 | Guzzle |
+| hyperf-log | PHP | Hyperf | Guzzle |
 | --- | --- | --- | --- |
-| `^0.5` | `>=8.2` | `^3.2` | `^7.0` |
-
-这是 `composer.json` 声明的安装范围。当前版本要求 Hyperf 3.2，不兼容 Hyperf 3.0 或
-3.1；项目使用的 `hyperf/command`、`context`、`coroutine`、`database`、`di`、`event`、
-`guzzle`、`http-server`、`logger` 和 `redis` 组件需要能够统一解析到 3.2。
+| `^0.7` | `>=8.2` | `^3.2` | `^7.0` |
 
 ## 安装
 
-包已发布到 Packagist：
-
 ```bash
-composer require sllhsmile/hyperf-log:^0.5
-```
-
-Hyperf 会通过 Composer 自动发现 `Sllhsmile\HyperfLog\ConfigProvider`，无需手工注册。
-随后发布链路和内容保护配置：
-
-```bash
+composer require sllhsmile/hyperf-log:^0.7
 php bin/hyperf.php vendor:publish sllhsmile/hyperf-log --id=trace-log-config
 ```
 
-配置将生成到 `config/autoload/trace_log.php`。本包没有必填环境变量，也不会覆盖现有的
-`config/autoload/logger.php`。
+Hyperf 会通过 Composer 自动发现 `Sllhsmile\HyperfLog\ConfigProvider`。配置发布到 `config/autoload/trace_log.php`。
 
-## 五分钟完成首次记录
+## 快速开始
 
-### 1. 开启 HTTP 请求生命周期事件
-
-`apilog` 依赖 Hyperf 的 `RequestHandled` 事件。确认 HTTP server 的配置包含：
+`apilog` 依赖 HTTP server 的请求生命周期事件：
 
 ```php
 'options' => [
@@ -83,12 +34,20 @@ php bin/hyperf.php vendor:publish sllhsmile/hyperf-log --id=trace-log-config
 ],
 ```
 
-该配置位于 `config/autoload/server.php` 中对应 HTTP server 的配置项内。
+在 `trace_log.php` 中启用需要的采集器：
 
-### 2. 配置日志 channel
+```php
+'logger_channel' => null, // 跟随 logger.default；也可指定已有的 daily、stderr 等 channel
 
-将下面的 `trace`、`apilog`、`redislog`、`sdklog` 和 `dblog` 合并到现有
-`config/autoload/logger.php` 的 `channels` 中：
+'collectors' => [
+    'api' => ['enabled' => true, 'response_enabled' => true],
+    'sdk' => ['enabled' => false, 'response_enabled' => false],
+    'database' => ['enabled' => false, 'response_enabled' => false],
+    'redis' => ['enabled' => false, 'response_enabled' => false],
+],
+```
+
+`logger_channel` 只引用 `config/autoload/logger.php` 中已经存在的 channel，不重复定义 Handler 或 Formatter。省略或设为 `null` 时使用 `logger.default`。如果所选 channel 已使用 `StructuredJsonFormatter`，无需再修改 `logger.php`；否则可按下面方式为该 channel 配置结构化输出：
 
 ```php
 <?php
@@ -97,24 +56,12 @@ declare(strict_types=1);
 
 use Monolog\Handler\StreamHandler;
 use Monolog\Logger;
-use Sllhsmile\HyperfLog\Formatter\CustomizeJsonFormatter;
+use Sllhsmile\HyperfLog\Formatter\StructuredJsonFormatter;
 
 return [
     'default' => 'default',
     'channels' => [
-        // 保留或替换为应用原有的 default channel。
         'default' => [
-            'handler' => [
-                'class' => StreamHandler::class,
-                'constructor' => [
-                    'stream' => BASE_PATH . '/runtime/logs/hyperf.log',
-                    'level' => Logger::INFO,
-                ],
-            ],
-        ],
-
-        // 四类采集器共用这套 Handler 和 JSON Formatter。
-        'trace' => [
             'handler' => [
                 'class' => StreamHandler::class,
                 'constructor' => [
@@ -122,94 +69,48 @@ return [
                     'level' => Logger::INFO,
                 ],
             ],
-            'formatter' => [
-                'class' => CustomizeJsonFormatter::class,
-            ],
-        ],
-
-        'apilog' => [
-            'enabled' => true,
-            'handlers' => ['trace'],
-        ],
-        'redislog' => [
-            'enabled' => false,
-            'response_enabled' => false,
-            'handlers' => ['trace'],
-        ],
-        'sdklog' => [
-            'enabled' => false,
-            'response_enabled' => false,
-            'handlers' => ['trace'],
-        ],
-        'dblog' => [
-            'enabled' => false,
-            'response_enabled' => false,
-            'handlers' => ['trace'],
+            'formatter' => ['class' => StructuredJsonFormatter::class],
         ],
     ],
 ];
 ```
 
-这个最小配置只启用 `apilog`，并将结构化日志写入 `runtime/logs/trace.log`。需要其他
-采集器时，将对应的 `enabled` 改为 `true`。
+四类采集器共用所选的物理 channel，但仍以 `apilog`、`sdklog`、`dblog`、`redislog` 作为 Monolog logger name，因此 JSON 中的 `channel` 字段保持可区分。
 
-### 3. 重启服务并验证
-
-配置修改后需要重启 Hyperf Worker：
-
-```bash
-php bin/hyperf.php start
-```
-
-另开终端访问应用中任意已有路由：
+重启 Worker，访问任意路由：
 
 ```bash
 curl -i -H 'x-b3-traceid: demo-trace-001' http://127.0.0.1:9501/
 tail -n 1 runtime/logs/trace.log
 ```
 
-响应 Header 中应包含 `x-b3-traceid: demo-trace-001`，日志中应出现
-`"message_type":"apilog"` 和 `"request_id":"demo-trace-001"`。如果不主动传入
-Header，本包会生成 UUID v7，并将最终值写回响应 Header。
+响应和日志应包含 `demo-trace-001`。
 
-## 选择需要的日志
+## 日志结构
 
-| Channel | 默认状态 | `response_enabled` | 生产注意事项 |
-| --- | --- | --- | --- |
-| `apilog` | 关闭 | 不适用 | 请求体和响应体会被记录，并受 `payload.max_bytes` 限制 |
-| `dblog` | 关闭 | 默认 `false` | SQL 会展开 bindings；不脱敏，但 SQL 和结果仍受容量限制 |
-| `redislog` | 关闭 | 默认 `false` | 命令会展开全部参数；开启后才记录执行结果 |
-| `sdklog` | 关闭 | 默认 `false` | 请求始终记录；开启后才读取并记录响应体 |
+采集器分别使用 `http.server`、`http.client`、`database.query` 和 `redis.command` 类型。普通应用日志使用 `application`，原始消息和上下文分别位于 `message`、`context`，业务上下文无法覆盖保留字段。
 
-`response_enabled` 配置在各自的 `logger.channels.redislog`、
-`logger.channels.dblog` 或 `logger.channels.sdklog` 下。建议生产环境保持关闭，确需响应
-内容时再独立开启。
-
-如果需要分文件，可以为每个采集器提供独立 handler；如果已有共享 channel，也可以用
-`channel` 映射：
-
-```php
-'apilog' => [
-    'enabled' => true,
-    'channel' => 'application-json',
-],
+```json
+{
+  "schema_version": 1,
+  "timestamp": "2026-09-16 10:20:30.123456+08:00",
+  "level": "INFO",
+  "type": "http.server",
+  "channel": "apilog",
+  "service": "xthk",
+  "request_id": "demo-trace-001",
+  "coroutine_id": 12,
+  "duration_ms": 12.35,
+  "request": {"method": "POST", "url": "/users", "headers": {}, "body": {"name": "smile"}},
+  "response": {"status_code": 200, "headers": {}, "body": {"code": 0}}
+}
 ```
 
-## request ID 与运行环境
+`timestamp` 固定使用北京时间（`Asia/Shanghai`），格式为 `Y-m-d H:i:s.uP`。Header 名称统一转为小写，Header 值保持数组。无响应、无错误等不适用字段直接省略；`response_enabled=false` 时完全不读取或输出 `response`。
 
-默认使用 `x-b3-traceid`：
+## Request context
 
-- HTTP：保留有效的入站 Header；缺失或为空时生成 UUID v7，并写入请求上下文和响应。
-- Guzzle：存在当前 trace 时，所有出站请求都覆盖为该 trace 的 ID，保证同一请求内只有一个 ID。
-- CLI：`BeforeHandle` 监听器会在命令开始前自动初始化 ID。
-- RPC 或后台任务：在每个独立处理单元的入口注入 `RequestContext`，调用
-  `start()`；有上游 ID 时将其作为参数传入。该方法会以一个不可变值对象同时覆盖当前
-  Context 中上一条 trace 的 ID 和开始时间，适用于复用协程的长驻消费者。
-
-`start()` 是唯一生成入口，`current()` 是完整值对象的查询入口；`id()` 和 `startTime()`
-分别提供便捷的字段查询。三个查询方法均无副作用，未初始化时返回 `null`，不会在日志
-格式化或 Guzzle 请求过程中隐式生成半套上下文。
-业务代码需要读取当前 ID 时，可以直接注入公共服务：
+HTTP 和 CLI 入口会自动创建 trace。RPC、队列消费者等独立执行单元应在入口显式调用 `start()`：
 
 ```php
 <?php
@@ -218,200 +119,83 @@ declare(strict_types=1);
 
 namespace App\Service;
 
-use Sllhsmile\HyperfLog\Support\RequestContext;
+use Sllhsmile\HyperfLog\Context\RequestContext;
 
-final class CurrentTrace
+final readonly class CurrentTrace
 {
-    public function __construct(private readonly RequestContext $context)
+    public function __construct(private RequestContext $context) {}
+
+    public function begin(?string $upstreamId = null): void
     {
+        $this->context->start($upstreamId);
     }
 
     public function id(): ?string
     {
         return $this->context->id();
     }
-}
-```
 
-Header 名称可以在 `trace_log.php` 中修改；内部 Context 键固定使用 `RequestContext::class`，
-无需配置，也不应由业务代码直接读写。
-
-## Guzzle 超时
-
-`GuzzleLogAspect` 会作用于受 Hyperf AOP 管理的 `GuzzleHttp\Client`：无论 `sdklog` 是否
-启用，都会注入 request ID、请求开始时间和超时中间件。
-
-```php
-'guzzle' => [
-    'timeout' => 10,
-    'connect_timeout' => 3,
-],
-```
-
-两个值的单位都是秒：
-
-- `timeout`：请求超时时间。
-- `connect_timeout`：建立连接的超时时间。
-
-它们只会写入 Hyperf `CoroutineHandler` 使用的 `swoole.timeout` 和
-`swoole.connect_timeout`，不会修改普通 cURL Handler 的顶层超时。优先级从高到低为：
-
-1. 单次请求显式传入的 `swoole.*`。
-2. 单次请求顶层的 `timeout` / `connect_timeout`。
-3. `trace_log.guzzle` 的公共值。
-4. Swoole 默认行为。
-
-不配置时，本包不会主动设置超时。
-
-## 脱敏与容量限制
-
-发布的 `trace_log.php` 默认包含：
-
-| 配置 | 默认值 | 作用 |
-| --- | --- | --- |
-| `payload.sensitive_fields` | 常见凭据字段列表 | 按字段名忽略大小写脱敏 |
-| `payload.redaction_value` | `****` | 敏感值的替换内容 |
-| `payload.max_bytes` | `65536` | 单个负载字段允许记录的最大字节数 |
-
-内置处理器覆盖 Header、URL Query、JSON 请求体、URL encoded 表单、入站 API 的 multipart
-普通字段和 JSON 响应。可解析的 JSON 对象或数组会保留为结构化 `body`，普通文本和 URL
-encoded 表单保持字符串，multipart 普通字段保持数组。上传文件不读取内容，只在
-`request.files` 记录客户端文件名、媒体类型、大小和上传错误码。
-
-文本负载超限时会保留字符串预览；结构化负载或 PSR-7 Stream 超限时不会改写成字符串，
-而是将 `body` 设为 `null`。这些情况都会在顶层增加元数据：
-
-```json
-{
-    "response": {
-        "body": "truncated content..."
-    },
-    "payload_truncation": {
-        "response.body": {
-            "limit_bytes": 65536,
-            "original_bytes": 183420
-        }
+    public function startedAt(): ?float
+    {
+        return $this->context->startTime();
     }
 }
 ```
 
-显式声明为 `application/json` 或 `application/*+json` 的正文如果无法解析，也会采用失败
-关闭策略：`body` 设为 `null`，并在 `payload_omission.<path>.reason` 中记录
-`invalid_json`，避免畸形 JSON 绕过字段脱敏后原样写入日志。
+`start()` 是唯一生成入口；`current()`、`id()`、`startTime()` 都是无副作用查询。内部 Context key 固定为 `RequestContext::class`，无需配置。
 
-设置 `payload.sensitive_fields=[]` 会关闭通用字段脱敏；Redis `AUTH` 参数仍会强制遮蔽。
-设置 `payload.max_bytes=null` 会关闭截断。
+## 内容保护
 
-当前保护边界必须在生产使用前确认：
-
-- 为避免日志采集消费业务流，除 Hyperf `SwooleStream` 这类已知可安全读取的内存流外，
-  不可回绕或读取前已确认超限的 PSR-7 Stream 不读取 Body，对应 `body` 为 `null`。
-- `apilog` 会使用 ServerRequest 已解析的 multipart 字段并进行脱敏，不记录原始 Body；
-  `sdklog` 的出站 multipart 仍是原始字符串，只会截断。
-- Redis `request.command` 是格式化后的展示字符串，除 `AUTH` 外不会重新解析；敏感值仍可能
-  出现在其中。
-- `dblog` 不执行脱敏；bindings 会展开进 SQL，SQL 或查询结果可能包含敏感数据，但仍受
-  `payload.max_bytes` 容量限制。
-- 异常消息中的任意文本不会根据内容猜测敏感值，仅按结构化字段名处理。
-
-需要更严格规则时，在宿主 `config/autoload/dependencies.php` 中替换处理器：
+`trace_log.payload` 提供字段脱敏、替换文本和单字段字节上限：
 
 ```php
-use App\Logging\PayloadProcessor;
-use Sllhsmile\HyperfLog\Contract\PayloadProcessorInterface;
-
-return [
-    PayloadProcessorInterface::class => PayloadProcessor::class,
-];
+'payload' => [
+    'sensitive_fields' => ['authorization', 'cookie', 'password', 'token'],
+    'redaction_value' => '****',
+    'max_bytes' => 64 * 1024,
+],
 ```
 
-自定义实现接收的是父协程已经生成的数组/字符串快照；不要在处理器中读取 PSR-7 Stream
-或其他请求期可变对象。
+- API 和 SDK 的 Header、URL query、JSON、表单及结构化字段会递归脱敏。
+- 显式 JSON 无法解析时采用 fail-closed：正文被省略。
+- Redis `AUTH` 始终遮蔽；其他 Redis 命令和 SQL 不做字段语义猜测。
+- 可回绕流读取后恢复位置；Hyperf `SwooleStream` 可安全快照；其他不可回绕流不会被消费。
+- 文本超限时截断，结构化数据或流超限时省略。
 
-## 日志格式
-
-`CustomizeJsonFormatter` 输出单行 JSON，并将采集器 context 平铺到顶层。四类采集器统一
-使用数值型 `duration_ms`；HTTP 请求正文固定为 `request.body`，非空响应固定为对象且正文
-位于 `response.body`。JSON 保留对象/数组结构，普通文本保留字符串。例如：
+保护动作统一写入 `payload_protection`：
 
 ```json
 {
-    "message_type": "apilog",
-    "request_id": "demo-trace-001",
-    "request": {
-        "method": "POST",
-        "url": "/users",
-        "headers": {},
-        "body": {
-            "name": "smile"
-        }
-    },
-    "response": {
-        "status_code": 200,
-        "headers": {},
-        "body": {
-            "code": 0
-        }
-    },
-    "exception": null,
-    "duration_ms": 12.35
+  "payload_protection": [
+    {"path": "response.body", "action": "omitted", "reason": "limit_exceeded", "limit_bytes": 65536}
+  ]
 }
 ```
 
-由于 `body` 会忠实保留 JSON、multipart 和文本的语义类型，如果日志集中写入
-Elasticsearch，同一索引中不应让同一路径混用对象和字符串。建议按 `message_type` 或
-HTTP 内容类型拆分索引，或在写入前通过 ingest pipeline 分流到 `body_json`、`body_text`
-等类型固定的字段。
+动作包括 `truncated`、`omitted`；原因包括 `invalid_json`、`limit_exceeded`、`non_rewindable_stream`、`read_failed`。
 
-以下字段由 Formatter 保留，业务 context 不能覆盖：
+## Guzzle
 
-- `datetime`
-- `message_type`
-- `request_id`
-- `coroutine_id`
+Guzzle 客户端会自动透传当前 request ID，并在启用 SDK 采集器时记录调用日志。本包不设置或改写 `timeout`、`connect_timeout` 及 `swoole` 选项；连接和请求超时应由宿主应用或单次请求自行管理。
 
-`message_type` 对应 `apilog`、`dblog`、`redislog` 或 `sdklog`。`app_name` 优先读取应用的
-`app_name` 配置，未配置时回退到 `app_env`。
+## 从 0.6 升级
 
-## 生产注意事项
+0.7 是破坏性版本：
 
-- 日志通过子协程尽力写入，调用方不会显式等待子协程完成；Worker 被强制退出时，少量
-  日志可能来不及落盘。
-- 日志处理或写入失败不会中断业务。fallback 不复制 Header、Body 或 Query；SDK fallback
-  额外保留 request ID、请求方法、移除 Query 和 Fragment 的 URL，以及异常摘要。
-- 开启 `sdklog.response_enabled`、`redislog.response_enabled` 或
-  `dblog.response_enabled` 会增加内存、序列化与存储开销。
-- 已有同类 Listener、全局 Middleware 或 Guzzle Aspect 时，应关闭其中一套，避免重复日志
-  和重复 Header 注入。
-- 修改配置或替换容器依赖后必须重启 Worker；Hyperf 长驻进程不会自动加载 PHP 配置变化。
+- `RequestContext` 移至 `Sllhsmile\HyperfLog\Context`，`TraceContextData` 更名为 `TraceContext`。
+- `CustomizeJsonFormatter` 更名为 `StructuredJsonFormatter`。
+- 采集器开关与响应配置移至 `trace_log.collectors`；`trace_log.logger_channel` 统一选择已有的 Hyperf Logger channel。
+- 移除可配置的 Context key 和内部 Guzzle 开始时间 Header。
+- 日志升级为 `schema_version: 1`，使用固定北京时间的微秒时间、`type`、`error` 和 `payload_protection`。
+- 扩展 `PayloadProcessorInterface` 的实现需将 `process(string, array)` 改为 `process(Collector, array)`。
 
-## 常见问题
-
-### 已启用 `apilog`，为什么没有日志？
-
-确认 `logger.channels.apilog.enabled=true`、其 `handlers` 指向存在的 channel，并检查 HTTP
-server 的 `options.enable_request_lifecycle=true`。修改后需要重启 Worker。
-
-### 为什么没有 SDK、Redis 或数据库响应？
-
-`logger.channels.sdklog.response_enabled` 和
-`logger.channels.redislog.response_enabled`、`logger.channels.dblog.response_enabled` 默认
-都是 `false`，需要分别显式开启。
-
-### 为什么配置的 Guzzle 超时对 cURL Handler 没有效果？
-
-本包的公共超时只补充 Hyperf 协程 Handler 的 `swoole` 配置。普通 Guzzle/cURL 客户端请
-继续通过客户端或单次请求的顶层 `timeout`、`connect_timeout` 配置。
-
-## 测试
+## 开发验证
 
 ```bash
-composer install
 composer test
+composer analyse
+composer cs
+composer check
 ```
 
-## 反馈与许可证
-
-问题请提交到 [GitHub Issues](https://github.com/sllhSmile/hyperf-log/issues)。
-
-本项目使用 [MIT License](LICENSE)。
+MIT License。

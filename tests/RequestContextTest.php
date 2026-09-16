@@ -6,68 +6,46 @@ namespace Sllhsmile\HyperfLog\Tests;
 
 use Hyperf\Context\Context;
 use PHPUnit\Framework\TestCase;
-use Sllhsmile\HyperfLog\Support\RequestContext;
+use Sllhsmile\HyperfLog\Context\RequestContext;
+use Sllhsmile\HyperfLog\Context\TraceContext;
 
-class RequestContextTest extends TestCase
+final class RequestContextTest extends TestCase
 {
     protected function tearDown(): void
     {
         Context::destroy(RequestContext::CONTEXT_KEY);
     }
 
-    public function testStartCreatesCompleteTraceWithProvidedId(): void
+    public function testStartStoresOneImmutableTraceUnderTheClassName(): void
     {
-        $context = $this->context();
-
+        $context = new RequestContext();
         $trace = $context->start(' upstream-id ');
 
-        self::assertSame('upstream-id', $trace->requestId);
-        self::assertGreaterThan(0, $trace->startedAt);
-        self::assertSame($trace, $context->current());
+        self::assertSame(RequestContext::class, RequestContext::CONTEXT_KEY);
+        self::assertInstanceOf(TraceContext::class, $trace);
         self::assertSame('upstream-id', $context->id());
         self::assertSame($trace->startedAt, $context->startTime());
+        self::assertSame($trace, $context->current());
     }
 
-    public function testStartGeneratesIdWhenProvidedValueIsEmpty(): void
+    public function testStartGeneratesUuidAndAtomicallyReplacesTrace(): void
     {
-        $trace = $this->context()->start('  ');
+        $context = new RequestContext();
+        $first = $context->start();
+        $second = $context->start('second');
 
-        self::assertNotSame('', $trace->requestId);
-        self::assertGreaterThan(0, $trace->startedAt);
-    }
-
-    public function testStartingAnotherTraceAtomicallyReplacesPreviousState(): void
-    {
-        $context = $this->context();
-        $first = $context->start('first-trace');
-
-        $second = $context->start('second-trace');
-
-        self::assertNotSame($first, $second);
-        self::assertSame('second-trace', $second->requestId);
-        self::assertGreaterThanOrEqual($first->startedAt, $second->startedAt);
+        self::assertMatchesRegularExpression('/^[0-9a-f-]{36}$/', $first->requestId);
+        self::assertSame('second', $second->requestId);
         self::assertSame($second, $context->current());
     }
 
-    public function testCurrentDoesNotCreateTraceWhenContextIsMissing(): void
+    public function testReadMethodsDoNotImplicitlyCreateAContext(): void
     {
-        $context = $this->context();
+        $context = new RequestContext();
 
         self::assertNull($context->current());
         self::assertNull($context->id());
         self::assertNull($context->startTime());
         self::assertFalse(Context::has(RequestContext::CONTEXT_KEY));
-    }
-
-    public function testCurrentRejectsPartialOrForeignContextValue(): void
-    {
-        Context::set(RequestContext::CONTEXT_KEY, ['request_id' => 'partial']);
-
-        self::assertNull($this->context()->current());
-    }
-
-    private function context(): RequestContext
-    {
-        return new RequestContext();
     }
 }

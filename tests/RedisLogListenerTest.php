@@ -9,85 +9,52 @@ use Hyperf\Redis\Event\CommandExecuted;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 use RuntimeException;
+use Sllhsmile\HyperfLog\Contract\CollectorLoggerInterface;
+use Sllhsmile\HyperfLog\Enum\Collector;
 use Sllhsmile\HyperfLog\Listener\RedisLogListener;
 use Sllhsmile\HyperfLog\Support\LogConfig;
-use Sllhsmile\HyperfLog\Support\LogWriter;
-use Sllhsmile\HyperfLog\Support\RequestContext;
 
-class RedisLogListenerTest extends TestCase
+final class RedisLogListenerTest extends TestCase
 {
-    public function testItCombinesCommandAndParametersWithoutRecordingResponseByDefault(): void
+    public function testItAlwaysMasksAuthAndOmitsDisabledResponse(): void
     {
-        $writer = $this->createMock(LogWriter::class);
-        $writer->expects(self::once())->method('info')->with(
-            'redislog',
-            self::callback(static fn (array $context): bool =>
-                $context['request'] === [
-                    'connection' => 'default',
-                    'command' => 'HSET user:1 name smile password plain-secret',
-                ]
-                && $context['response'] === null),
+        $logger = $this->createMock(CollectorLoggerInterface::class);
+        $logger->expects(self::once())->method('info')->with(
+            Collector::Redis,
+            self::callback(static fn(array $value): bool =>
+                $value['request']['command'] === 'AUTH ***' && ! isset($value['response'])),
         );
-
-        $this->listener($writer)->process($this->event(
-            'HSET',
-            ['user:1', ['name' => 'smile', 'password' => 'plain-secret']],
-            1,
-        ));
+        $this->listener($logger)->process($this->event('AUTH', ['user', 'secret'], true));
     }
 
-    public function testItRecordsResultWhenResponseIsEnabled(): void
+    public function testFailureUsesErrorAndNeverResponse(): void
     {
-        $writer = $this->createMock(LogWriter::class);
-        $writer->expects(self::once())->method('info')->with(
-            'redislog',
-            self::callback(static fn (array $context): bool =>
-                $context['response'] === ['body' => 'value']
-                && $context['duration_ms'] === 1.2),
+        $logger = $this->createMock(CollectorLoggerInterface::class);
+        $logger->expects(self::once())->method('info')->with(
+            Collector::Redis,
+            self::callback(static fn(array $value): bool =>
+                $value['error']['type'] === RuntimeException::class && ! isset($value['response'])),
         );
-
-        $this->listener($writer, true)->process($this->event('GET', ['key'], 'value'));
+        $this->listener($logger, true)->process($this->event('GET', ['key'], null, new RuntimeException('failed')));
     }
 
-    public function testItAlwaysMasksAuthCommand(): void
+    private function listener(CollectorLoggerInterface $logger, bool $response = false): RedisLogListener
     {
-        $writer = $this->createMock(LogWriter::class);
-        $writer->expects(self::once())->method('info')->with(
-            'redislog',
-            self::callback(static fn (array $context): bool => $context['request']['command'] === 'AUTH ***'),
-        );
-
-        $this->listener($writer)->process($this->event('AUTH', ['default', 'redis-password'], true));
+        return new RedisLogListener(new LogConfig(new Config(['trace_log' => ['collectors' => [
+            'redis' => ['enabled' => true, 'response_enabled' => $response],
+        ]]])), $logger);
     }
 
-    private function listener(LogWriter $writer, bool $responseEnabled = false): RedisLogListener
+    /** @param array<array-key, mixed> $parameters */
+    private function event(string $command, array $parameters, mixed $result, ?RuntimeException $error = null): CommandExecuted
     {
-        $config = new LogConfig(new Config([
-            'logger' => ['channels' => ['redislog' => [
-                'enabled' => true,
-                'response_enabled' => $responseEnabled,
-            ]]],
-        ]));
-
-        return new RedisLogListener($config, $writer, new RequestContext());
-    }
-
-    /**
-     * RedisConnection 只用于事件类型声明，监听器不会读取它，因此测试不初始化该属性。
-     */
-    private function event(
-        string $command,
-        array $parameters,
-        mixed $result,
-        ?RuntimeException $throwable = null,
-    ): CommandExecuted {
         $event = (new ReflectionClass(CommandExecuted::class))->newInstanceWithoutConstructor();
         $event->command = $command;
         $event->parameters = $parameters;
         $event->time = 1.2;
         $event->connectionName = 'default';
         $event->result = $result;
-        $event->throwable = $throwable;
+        $event->throwable = $error;
 
         return $event;
     }

@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 $packageRoot = dirname(__DIR__);
+defined('BASE_PATH') || define('BASE_PATH', $packageRoot);
 $autoloadCandidates = [
     $packageRoot . '/vendor/autoload.php',
     getcwd() . '/vendor/autoload.php',

@@ -6,65 +6,52 @@ namespace Sllhsmile\HyperfLog\Tests;
 
 use Hyperf\Config\Config;
 use Hyperf\Database\Connection;
-use Hyperf\Database\ConnectionInterface;
+use Hyperf\Database\Events\QueryExecuted;
+use PDO;
 use PHPUnit\Framework\TestCase;
+use Sllhsmile\HyperfLog\Contract\CollectorLoggerInterface;
+use Sllhsmile\HyperfLog\Enum\Collector;
 use Sllhsmile\HyperfLog\Listener\DatabaseLogListener;
 use Sllhsmile\HyperfLog\Support\LogConfig;
-use Sllhsmile\HyperfLog\Support\LogWriter;
-use Sllhsmile\HyperfLog\Support\RequestContext;
+use Sllhsmile\HyperfLog\Support\SqlInterpolator;
 
-/**
- * 验证数据库日志的完整 SQL 参数展开逻辑。
- */
-class DatabaseLogListenerTest extends TestCase
+final class DatabaseLogListenerTest extends TestCase
 {
-    public function testItUsesTheUnifiedResponseAndDurationShape(): void
+    public function testItInterpolatesBindingsWithoutTouchingQuotedOrCommentedMarkers(): void
     {
-        $connection = $this->createMock(Connection::class);
-        $connection->method('prepareBindings')->willReturnCallback(static fn (array $bindings): array => $bindings);
-        $connection->method('getDatabaseName')->willReturn('app');
-        $connection->method('getName')->willReturn('default');
+        $connection = $this->connection();
+        $sql = "select '?' as literal, name from users where id = ? and name = :name -- ?\n";
 
-        $writer = $this->createMock(LogWriter::class);
-        $writer->expects(self::once())->method('info')->with(
-            'dblog',
-            self::callback(static fn (array $context): bool =>
-                $context['response'] === ['body' => [['id' => 1]]]
-                && $context['duration_ms'] === 2.5
-                && ! array_key_exists('run_time', $context)),
-        );
-        $config = new LogConfig(new Config([
-            'logger' => ['channels' => ['dblog' => ['enabled' => true, 'response_enabled' => true]]],
-        ]));
-        $listener = new DatabaseLogListener($config, $writer, new RequestContext());
-        $event = new \Hyperf\Database\Events\QueryExecuted('select 1', [], 2.5, $connection, [['id' => 1]]);
+        $result = (new SqlInterpolator())->interpolate($sql, [7, 'name' => "O'Reilly"], $connection);
 
-        $listener->process($event);
+        self::assertSame("select '?' as literal, name from users where id = 7 and name = 'O''Reilly' -- ?\n", $result);
     }
 
-    /**
-     * 覆盖顺序参数、命名参数、NULL、布尔、数字、引号以及 SQL 字符串内问号。
-     */
-    public function testItInterpolatesBindingsWithoutChangingSqlLiterals(): void
+    public function testListenerOmitsResponseUnlessExplicitlyEnabled(): void
     {
-        $connection = $this->createMock(ConnectionInterface::class);
-        $connection->method('prepareBindings')->willReturnCallback(static fn (array $bindings): array => $bindings);
-
-        $config = new LogConfig(new Config([]));
-        $listener = new DatabaseLogListener(
-            $config,
-            $this->createMock(LogWriter::class),
-            new RequestContext(),
+        $logger = $this->createMock(CollectorLoggerInterface::class);
+        $logger->expects(self::once())->method('info')->with(
+            Collector::Database,
+            self::callback(static fn(array $value): bool =>
+                $value['duration_ms'] === 2.5 && ! isset($value['response'])),
         );
-        $method = new \ReflectionMethod($listener, 'interpolateSql');
+        $config = new LogConfig(new Config(['trace_log' => ['collectors' => [
+            'database' => ['enabled' => true, 'response_enabled' => false],
+        ]]]));
+        $listener = new DatabaseLogListener($config, $logger, new SqlInterpolator());
+        $listener->process(new QueryExecuted('select ?', [1], 2.5, $this->connection(), ['row']));
+    }
 
-        $sql = $method->invoke(
-            $listener,
-            "select '?' as literal, * from users where id = ? and active = ? and deleted_at is ? and name = :name",
-            [7, true, null, 'name' => "O'Reilly"],
-            $connection,
-        );
+    private function connection(): Connection
+    {
+        $connection = $this->createMock(Connection::class);
+        $connection->method('prepareBindings')->willReturnArgument(0);
+        $connection->method('getDatabaseName')->willReturn('testing');
+        $connection->method('getName')->willReturn('default');
+        $pdo = $this->createMock(PDO::class);
+        $pdo->method('quote')->willReturnCallback(static fn(string $value): string => "'" . str_replace("'", "''", $value) . "'");
+        $connection->method('getPdo')->willReturn($pdo);
 
-        self::assertSame("select '?' as literal, * from users where id = 7 and active = 1 and deleted_at is NULL and name = 'O''Reilly'", $sql);
+        return $connection;
     }
 }

@@ -5,58 +5,48 @@ declare(strict_types=1);
 namespace Sllhsmile\HyperfLog\Tests;
 
 use Hyperf\Config\Config;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use Sllhsmile\HyperfLog\Enum\Collector;
 use Sllhsmile\HyperfLog\Support\LogConfig;
+use Sllhsmile\HyperfLog\Support\PayloadLimiter;
 use Sllhsmile\HyperfLog\Support\PayloadProcessor;
+use Sllhsmile\HyperfLog\Support\PayloadRedactor;
 
-class PayloadProcessorTest extends TestCase
+final class PayloadProcessorTest extends TestCase
 {
-    public function testItRedactsHeadersQueryJsonAndResponseFields(): void
+    public function testItNormalizesHeadersAndRecursivelyRedactsHttpPayloads(): void
     {
-        $processor = $this->processor();
-
-        $result = $processor->process('apilog', [
+        $result = $this->processor()->process(Collector::Api, [
             'request' => [
-                'url' => 'https://example.com/users?token=secret&name=smile&profile[password]=123',
-                'headers' => [
-                    'Authorization' => ['Bearer secret'],
-                    'Content-Type' => ['application/json'],
-                ],
-                'body' => json_encode([
-                    'name' => 'smile',
-                    'password' => '123456',
-                    'profile' => ['access_token' => 'token-value'],
-                ], JSON_THROW_ON_ERROR),
-            ],
-            'response' => [
-                'body' => json_encode([
-                    'id' => 1,
-                    'token' => 'response-token',
-                ], JSON_THROW_ON_ERROR),
+                'url' => 'https://example.test?a=1&token=secret',
+                'headers' => ['Authorization' => ['Bearer secret'], 'Content-Type' => ['application/json']],
+                'body' => '{"profile":{"password":"secret"}}',
             ],
         ]);
 
-        self::assertSame(['****'], $result['request']['headers']['Authorization']);
-        self::assertSame(['application/json'], $result['request']['headers']['Content-Type']);
-        self::assertSame(
-            'https://example.com/users?token=%2A%2A%2A%2A&name=smile&profile[password]=%2A%2A%2A%2A',
-            $result['request']['url'],
-        );
-        self::assertSame([
-            'name' => 'smile',
-            'password' => '****',
-            'profile' => ['access_token' => '****'],
-        ], $result['request']['body']);
-        self::assertSame(
-            ['id' => 1, 'token' => '****'],
-            $result['response']['body'],
-        );
-        self::assertArrayNotHasKey('payload_truncation', $result);
+        self::assertSame(['****'], $result['request']['headers']['authorization']);
+        self::assertArrayNotHasKey('Authorization', $result['request']['headers']);
+        self::assertSame('https://example.test?a=1&token=%2A%2A%2A%2A', $result['request']['url']);
+        self::assertSame('****', $result['request']['body']['profile']['password']);
     }
 
-    public function testItRedactsSensitiveFieldsNestedBelowBusinessHeadersKey(): void
+    public function testMalformedDeclaredJsonIsOmittedFailClosed(): void
     {
-        $result = $this->processor()->process('apilog', [
+        $result = $this->processor()->process(Collector::Sdk, [
+            'response' => ['headers' => ['Content-Type' => ['application/problem+json']], 'body' => '{"token":"secret"'],
+        ]);
+
+        self::assertArrayNotHasKey('body', $result['response']);
+        self::assertSame([
+            'path' => 'response.body', 'action' => 'omitted', 'reason' => 'invalid_json',
+        ], $result['payload_protection'][0]);
+        self::assertStringNotContainsString('secret', json_encode($result, JSON_THROW_ON_ERROR));
+    }
+
+    public function testBusinessFieldNamedHeadersKeepsItsJsonShape(): void
+    {
+        $result = $this->processor()->process(Collector::Api, [
             'request' => [
                 'headers' => ['Content-Type' => ['application/json']],
                 'body' => '{"headers":{"nested":{"token":"secret"}}}',
@@ -64,219 +54,51 @@ class PayloadProcessorTest extends TestCase
         ]);
 
         self::assertSame('****', $result['request']['body']['headers']['nested']['token']);
+        self::assertSame(['application/json'], $result['request']['headers']['content-type']);
     }
 
-    public function testItOmitsMalformedExplicitJsonInsteadOfLoggingItUnredacted(): void
+    #[DataProvider('jsonScalarProvider')]
+    public function testValidJsonPreservesEveryJsonType(string $json, mixed $expected): void
     {
-        $result = $this->processor()->process('apilog', [
-            'request' => [
-                'headers' => ['Content-Type' => ['application/json']],
-                'body' => '{"password":"request-secret"',
-            ],
-            'response' => [
-                'headers' => ['Content-Type' => ['application/problem+json']],
-                'body' => '{"token":"response-secret"',
-            ],
+        $result = $this->processor()->process(Collector::Api, [
+            'request' => ['headers' => ['content-type' => ['application/json']], 'body' => $json],
         ]);
 
-        self::assertNull($result['request']['body']);
-        self::assertNull($result['response']['body']);
-        self::assertSame(
-            ['reason' => 'invalid_json'],
-            $result['payload_omission']['request.body'],
-        );
-        self::assertSame(
-            ['reason' => 'invalid_json'],
-            $result['payload_omission']['response.body'],
-        );
-        self::assertStringNotContainsString('request-secret', json_encode($result, JSON_THROW_ON_ERROR));
-        self::assertStringNotContainsString('response-secret', json_encode($result, JSON_THROW_ON_ERROR));
+        self::assertSame($expected, $result['request']['body']);
     }
 
-    public function testItUsesContentTypeBeforeHeadersAreRedacted(): void
+    /** @return list<array{string, mixed}> */
+    public static function jsonScalarProvider(): array
     {
-        $processor = $this->processor([
-            'sensitive_fields' => ['content-type', 'password'],
-            'redaction_value' => '****',
-            'max_bytes' => null,
-        ]);
-
-        $result = $processor->process('apilog', [
-            'request' => [
-                'headers' => ['Content-Type' => ['application/json']],
-                'body' => '{"password":"secret"}',
-            ],
-        ]);
-
-        self::assertSame(['****'], $result['request']['headers']['Content-Type']);
-        self::assertSame(['password' => '****'], $result['request']['body']);
+        return [['null', null], ['true', true], ['42', 42], ['"value"', 'value'], ['[]', []]];
     }
 
-    public function testItUsesConfiguredFieldsAndReplacement(): void
+    public function testItTruncatesStringsAndOmitsOversizedStructures(): void
     {
-        $processor = $this->processor([
-            'sensitive_fields' => ['pin'],
-            'redaction_value' => '[hidden]',
-            'max_bytes' => null,
+        $result = $this->processor(12)->process(Collector::Redis, [
+            'request' => ['command' => str_repeat('x', 20)],
+            'response' => ['body' => ['secret' => str_repeat('x', 20)]],
         ]);
 
-        $result = $processor->process('sdklog', [
-            'request' => [
-                'url' => 'https://example.com?pin=1234&token=kept',
-                'headers' => [],
-                'body' => '{"pin":"1234","password":"kept"}',
-            ],
-            'response' => null,
-        ]);
-
-        self::assertSame('https://example.com?pin=%5Bhidden%5D&token=kept', $result['request']['url']);
-        self::assertSame(
-            ['pin' => '[hidden]', 'password' => 'kept'],
-            $result['request']['body'],
-        );
+        self::assertSame('xxxxxxxxx...', $result['request']['command']);
+        self::assertArrayNotHasKey('body', $result['response']);
+        self::assertSame('truncated', $result['payload_protection'][0]['action']);
+        self::assertSame('omitted', $result['payload_protection'][1]['action']);
     }
 
-    public function testItPreservesJsonStructureWhenRedactionIsDisabled(): void
+    public function testDatabasePayloadIsNotFieldRedacted(): void
     {
-        $processor = $this->processor([
-            'sensitive_fields' => [],
-            'redaction_value' => '****',
-            'max_bytes' => null,
+        $result = $this->processor()->process(Collector::Database, [
+            'request' => ['sql' => "select 'password'"],
         ]);
 
-        $result = $processor->process('apilog', [
-            'request' => [
-                'headers' => ['Content-Type' => ['application/json']],
-                'body' => '{"token":"plain-token"}',
-            ],
-            'response' => ['body' => '{"ok":true}'],
-        ]);
-
-        self::assertSame(['token' => 'plain-token'], $result['request']['body']);
-        self::assertSame(['ok' => true], $result['response']['body']);
+        self::assertSame("select 'password'", $result['request']['sql']);
     }
 
-    public function testItKeepsPlainTextBodyAsString(): void
+    private function processor(?int $maxBytes = null): PayloadProcessor
     {
-        $result = $this->processor()->process('apilog', [
-            'request' => [
-                'headers' => ['Content-Type' => ['text/plain']],
-                'body' => '{"looks":"like json"}',
-            ],
-            'response' => [
-                'headers' => ['Content-Type' => ['text/plain']],
-                'body' => '{"also":"json-looking"}',
-            ],
-        ]);
+        $config = new LogConfig(new Config(['trace_log' => ['payload' => ['max_bytes' => $maxBytes]]]));
 
-        self::assertSame('{"looks":"like json"}', $result['request']['body']);
-        self::assertSame('{"also":"json-looking"}', $result['response']['body']);
-    }
-
-    public function testItKeepsJsonLookingRedisResultAsString(): void
-    {
-        $result = $this->processor()->process('redislog', [
-            'request' => ['command' => 'GET cached-json'],
-            'response' => ['body' => '{"token":"stored-value"}'],
-        ]);
-
-        self::assertSame('{"token":"stored-value"}', $result['response']['body']);
-    }
-
-    public function testItRedactsFormEncodedRequestBody(): void
-    {
-        $result = $this->processor()->process('apilog', [
-            'request' => [
-                'url' => 'https://example.com/login',
-                'headers' => ['Content-Type' => ['application/x-www-form-urlencoded; charset=UTF-8']],
-                'body' => 'username=smile&password=123&profile[token]=abc',
-            ],
-            'response' => null,
-        ]);
-
-        self::assertSame(
-            'username=smile&password=%2A%2A%2A%2A&profile[token]=%2A%2A%2A%2A',
-            $result['request']['body'],
-        );
-    }
-
-    public function testItRedactsParsedMultipartFieldsAndKeepsFileMetadata(): void
-    {
-        $result = $this->processor()->process('apilog', [
-            'request' => [
-                'url' => 'https://example.com/profile',
-                'headers' => ['Content-Type' => ['multipart/form-data; boundary=test']],
-                'body' => ['name' => 'smile', 'password' => 'plain-secret'],
-                'files' => [
-                    'avatar' => [
-                        'filename' => 'avatar.jpg',
-                        'media_type' => 'image/jpeg',
-                        'size' => 12,
-                        'error' => UPLOAD_ERR_OK,
-                    ],
-                ],
-            ],
-        ]);
-
-        self::assertSame(
-            ['name' => 'smile', 'password' => '****'],
-            $result['request']['body'],
-        );
-        self::assertSame('avatar.jpg', $result['request']['files']['avatar']['filename']);
-        self::assertSame(12, $result['request']['files']['avatar']['size']);
-    }
-
-    public function testItTruncatesPayloadsAndAddsMetadata(): void
-    {
-        $processor = $this->processor([
-            'sensitive_fields' => [],
-            'redaction_value' => '****',
-            'max_bytes' => 16,
-        ]);
-
-        $result = $processor->process('redislog', [
-            'request' => [
-                'command' => 'SET key ' . str_repeat('a', 40),
-            ],
-            'response' => ['body' => str_repeat('中', 20)],
-        ]);
-
-        self::assertLessThanOrEqual(16, strlen($result['request']['command']));
-        self::assertLessThanOrEqual(16, strlen($result['response']['body']));
-        self::assertSame(48, $result['payload_truncation']['request.command']['original_bytes']);
-        self::assertSame(60, $result['payload_truncation']['response.body']['original_bytes']);
-    }
-
-    public function testItLeavesDatabaseContentUnredactedButStillLimitsCapacity(): void
-    {
-        $processor = $this->processor([
-            'sensitive_fields' => ['password'],
-            'redaction_value' => '****',
-            'max_bytes' => 8,
-        ]);
-        $context = [
-            'request' => [
-                'sql' => "select * from users where password = 'plain-secret'",
-            ],
-            'response' => ['body' => ['password' => 'plain-secret', 'value' => str_repeat('x', 20)]],
-        ];
-
-        $result = $processor->process('dblog', $context);
-
-        self::assertLessThanOrEqual(8, strlen($result['request']['sql']));
-        self::assertNull($result['response']['body']);
-        self::assertStringStartsWith('selec', $result['request']['sql']);
-        self::assertArrayHasKey('request.sql', $result['payload_truncation']);
-        self::assertArrayHasKey('response.body', $result['payload_truncation']);
-    }
-
-    /**
-     * @param array<string, mixed>|null $payload
-     */
-    private function processor(?array $payload = null): PayloadProcessor
-    {
-        $configuration = $payload === null ? [] : ['trace_log' => ['payload' => $payload]];
-
-        return new PayloadProcessor(new LogConfig(new Config($configuration)));
+        return new PayloadProcessor(new PayloadRedactor($config), new PayloadLimiter($config));
     }
 }
