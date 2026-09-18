@@ -5,4 +5,5 @@ parameters:
     paths:
         - src
         - tests
+        - benchmark
     tmpDir: /tmp/hyperf-log-phpstan

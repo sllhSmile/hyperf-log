@@ -54,4 +54,31 @@ final class DatabaseLogListenerTest extends TestCase
 
         return $connection;
     }
+
+    public function testListenerIncludesExplicitlyEnabledResult(): void
+    {
+        $logger = $this->createMock(CollectorLoggerInterface::class);
+        $logger->expects(self::once())->method('info')->with(
+            Collector::Database,
+            self::callback(static fn(array $value): bool =>
+                $value['request']['sql'] === 'select 1'
+                && $value['response']['body'] === ['row']),
+        );
+        $config = new LogConfig(new Config(['trace_log' => ['collectors' => [
+            'database' => ['enabled' => true, 'response_enabled' => true],
+        ]]]));
+
+        (new DatabaseLogListener($config, $logger, new SqlInterpolator()))
+            ->process(new QueryExecuted('select ?', [1], 2.5, $this->connection(), ['row']));
+    }
+
+    public function testDisabledCollectorAndUnrelatedEventsDoNotLog(): void
+    {
+        $logger = $this->createMock(CollectorLoggerInterface::class);
+        $logger->expects(self::never())->method('info');
+        $listener = new DatabaseLogListener(new LogConfig(new Config([])), $logger, new SqlInterpolator());
+
+        $listener->process(new \stdClass());
+        $listener->process(new QueryExecuted('select ?', [1], 2.5, $this->connection()));
+    }
 }

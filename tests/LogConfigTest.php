@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Sllhsmile\HyperfLog\Tests;
 
 use Hyperf\Config\Config;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Sllhsmile\HyperfLog\Enum\Collector;
 use Sllhsmile\HyperfLog\Support\LogConfig;
@@ -32,6 +33,7 @@ final class LogConfigTest extends TestCase
         self::assertFalse($config->responseEnabled(Collector::Sdk));
         self::assertNull($config->loggerChannel());
         self::assertSame('x-b3-traceid', $config->requestIdHeader());
+        self::assertSame('async', $config->writeMode());
     }
 
     public function testLoggerChannelCanSelectAnExistingHyperfChannel(): void
@@ -55,4 +57,28 @@ final class LogConfigTest extends TestCase
         $this->expectException(\InvalidArgumentException::class);
         $config->payloadMaxBytes();
     }
+
+    public function testWriteModeCanSelectSynchronousWrites(): void
+    {
+        $config = new LogConfig(new Config(['trace_log' => ['write_mode' => 'sync']]));
+
+        self::assertSame('sync', $config->writeMode());
+    }
+
+    /** @return list<array{mixed}> */
+    public static function invalidWriteModes(): array
+    {
+        return [['ASYNC'], [' sync '], [''], ['invalid'], [null], [false], [1], [[]]];
+    }
+
+    #[DataProvider('invalidWriteModes')]
+    public function testInvalidWriteModeFailsFast(mixed $mode): void
+    {
+        $config = new LogConfig(new Config(['trace_log' => ['write_mode' => $mode]]));
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('trace_log.write_mode');
+        $config->writeMode();
+    }
+
 }

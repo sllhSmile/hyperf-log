@@ -1,1 +1,7 @@
 /.phpunit.result.cache export-ignore
+/benchmark export-ignore
+/tests export-ignore
+/.github export-ignore
+/.php-cs-fixer.php export-ignore
+/phpstan.neon export-ignore
+/phpunit.xml export-ignore

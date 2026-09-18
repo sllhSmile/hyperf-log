@@ -112,6 +112,59 @@ final class GuzzleMiddlewareInstallerTest extends TestCase
         self::assertSame(204, $response->getStatusCode());
     }
 
+    public function testSynchronousHandlerExceptionIsLoggedAndRethrownUnchanged(): void
+    {
+        $error = new RuntimeException('synchronous failure');
+        $stack = HandlerStack::create(static function () use ($error): never {
+            throw $error;
+        });
+        $logger = $this->createMock(CollectorLoggerInterface::class);
+        $logger->expects(self::once())->method('info')->with(
+            Collector::Sdk,
+            self::callback(static fn(array $value): bool => $value['error']['message'] === 'synchronous failure'),
+        );
+        $this->installer($this->config(true, true), new RequestContext(), $logger)->install($stack);
+
+        try {
+            (new Client(['handler' => $stack]))->get('https://example.test');
+            self::fail('Expected synchronous request failure.');
+        } catch (RuntimeException $caught) {
+            self::assertSame($error, $caught);
+        }
+    }
+
+    public function testRepeatedInstallationLogsOnceAndRestoresResponseStream(): void
+    {
+        $response = new Response(201, ['Content-Type' => 'application/json'], '{"ok":true}');
+        $response->getBody()->seek(3);
+        $stack = HandlerStack::create(static fn() => Create::promiseFor($response));
+        $logger = $this->createMock(CollectorLoggerInterface::class);
+        $logger->expects(self::once())->method('info')->with(
+            Collector::Sdk,
+            self::callback(static fn(array $value): bool =>
+                $value['response']['body'] === '{"ok":true}'
+                && $value['response']['status_code'] === 201),
+        );
+        $installer = $this->installer($this->config(true, true), new RequestContext(), $logger);
+        $installer->install($stack);
+        $installer->install($stack);
+
+        $received = (new Client(['handler' => $stack]))->get('https://example.test');
+
+        self::assertSame($response, $received);
+        self::assertSame(3, $response->getBody()->tell());
+    }
+
+    public function testLogWriteFailureDoesNotReplaceTheResponse(): void
+    {
+        $stack = HandlerStack::create(static fn() => Create::promiseFor(new Response(204)));
+        $logger = $this->createMock(CollectorLoggerInterface::class);
+        $logger->method('info')->willThrowException(new RuntimeException('write failed'));
+        $this->installer($this->config(true, true), new RequestContext(), $logger)->install($stack);
+
+        self::assertSame(204, (new Client(['handler' => $stack]))->get('https://example.test')->getStatusCode());
+    }
+
     private function config(bool $enabled, bool $response): LogConfig
     {
         return new LogConfig(new Config(['trace_log' => [

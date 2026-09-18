@@ -15,6 +15,8 @@ use Sllhsmile\HyperfLog\Enum\Collector;
  */
 final readonly class LogConfig
 {
+    private const WRITE_MODES = ['async', 'sync'];
+
     private const DEFAULT_SENSITIVE_FIELDS = [
         'authorization', 'proxy-authorization', 'cookie', 'set-cookie', 'x-api-key',
         'password', 'passwd', 'token', 'access_token', 'refresh_token', 'api_key',
@@ -50,6 +52,16 @@ final readonly class LogConfig
         }
 
         return trim($channel);
+    }
+
+    public function writeMode(): string
+    {
+        $mode = $this->config->get('trace_log.write_mode', 'async');
+        if (! is_string($mode) || ! in_array($mode, self::WRITE_MODES, true)) {
+            throw new \InvalidArgumentException('trace_log.write_mode must be either "async" or "sync".');
+        }
+
+        return $mode;
     }
 
     public function responseEnabled(Collector $collector): bool

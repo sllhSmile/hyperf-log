@@ -9,8 +9,11 @@ use GuzzleHttp\Psr7\Response;
 use GuzzleHttp\Psr7\ServerRequest;
 use GuzzleHttp\Psr7\Utils;
 use Hyperf\Config\Config;
+use Hyperf\Context\Context;
 use Hyperf\HttpServer\Event\RequestHandled;
 use PHPUnit\Framework\TestCase;
+use Psr\Http\Message\StreamInterface;
+use RuntimeException;
 use Sllhsmile\HyperfLog\Context\RequestContext;
 use Sllhsmile\HyperfLog\Contract\CollectorLoggerInterface;
 use Sllhsmile\HyperfLog\Enum\Collector;
@@ -20,6 +23,11 @@ use Sllhsmile\HyperfLog\Support\PayloadSnapshotter;
 
 final class ApiLogListenerTest extends TestCase
 {
+    protected function tearDown(): void
+    {
+        Context::destroy(RequestContext::CONTEXT_KEY);
+    }
+
     public function testItBuildsCompactHttpContextAndRestoresStreams(): void
     {
         $requestBody = Utils::streamFor('{"password":"secret"}');
@@ -45,12 +53,18 @@ final class ApiLogListenerTest extends TestCase
 
     public function testDisabledResponseIsEntirelyOmitted(): void
     {
+        $stream = $this->createMock(StreamInterface::class);
+        $stream->expects(self::never())->method('getContents');
+        $stream->expects(self::never())->method('isSeekable');
         $logger = $this->createMock(CollectorLoggerInterface::class);
         $logger->expects(self::once())->method('info')->with(
             Collector::Api,
             self::callback(static fn(array $value): bool => ! array_key_exists('response', $value)),
         );
-        $this->listener($logger, false)->process(new RequestHandled(new ServerRequest('GET', '/'), new Response()));
+        $this->listener($logger, false)->process(new RequestHandled(
+            new ServerRequest('GET', '/'),
+            (new Response())->withBody($stream),
+        ));
     }
 
     public function testNonRewindableBodyIsOmittedWithReasonAndNotConsumed(): void
@@ -68,6 +82,36 @@ final class ApiLogListenerTest extends TestCase
 
         $this->listener($logger)->process(new RequestHandled($request, new Response()));
         self::assertSame(3, $inner->tell());
+    }
+
+    public function testItRecordsBusinessExceptionAndElapsedTime(): void
+    {
+        (new RequestContext())->start('api-trace');
+        $logger = $this->createMock(CollectorLoggerInterface::class);
+        $logger->expects(self::once())->method('info')->with(
+            Collector::Api,
+            self::callback(static fn(array $value): bool =>
+                $value['error']['type'] === RuntimeException::class
+                && $value['error']['code'] === 7
+                && $value['duration_ms'] >= 0),
+        );
+
+        $this->listener($logger)->process(new RequestHandled(
+            new ServerRequest('GET', '/'),
+            new Response(500),
+            new RuntimeException('business failed', 7),
+        ));
+    }
+
+    public function testDisabledCollectorAndUnrelatedEventsDoNotLog(): void
+    {
+        $logger = $this->createMock(CollectorLoggerInterface::class);
+        $logger->expects(self::never())->method('info');
+        $config = new LogConfig(new Config([]));
+        $listener = new ApiLogListener($config, $logger, new RequestContext(), new PayloadSnapshotter($config));
+
+        $listener->process(new \stdClass());
+        $listener->process(new RequestHandled(new ServerRequest('GET', '/'), new Response()));
     }
 
     private function listener(CollectorLoggerInterface $logger, bool $response = true): ApiLogListener

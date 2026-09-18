@@ -16,5 +16,6 @@ jobs:
         with:
           php-version: ${{ matrix.php }}
           coverage: none
+          extensions: swoole
       - uses: ramsey/composer-install@v3
       - run: composer check

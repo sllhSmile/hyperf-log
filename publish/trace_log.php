@@ -7,6 +7,8 @@ return [
     'request_id_header' => 'x-b3-traceid',
     // null 跟随 logger.default；也可填写 logger.channels 中已有的 channel 名称。
     'logger_channel' => null,
+    // async 在协程中派生子协程写入；sync 在当前执行单元完成写入尝试。
+    'write_mode' => 'async',
     // 采集器默认关闭；response_enabled=false 时不会读取或输出对应响应/结果。
     'collectors' => [
         'api' => ['enabled' => false, 'response_enabled' => true],

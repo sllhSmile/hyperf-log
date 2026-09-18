@@ -38,6 +38,30 @@ final class RedisLogListenerTest extends TestCase
         $this->listener($logger, true)->process($this->event('GET', ['key'], null, new RuntimeException('failed')));
     }
 
+    public function testSuccessfulResultIsIncludedOnlyWhenEnabled(): void
+    {
+        $logger = $this->createMock(CollectorLoggerInterface::class);
+        $logger->expects(self::once())->method('info')->with(
+            Collector::Redis,
+            self::callback(static fn(array $value): bool =>
+                $value['request']['command'] === 'GET key'
+                && $value['response']['body'] === 'value'
+                && ! isset($value['error'])),
+        );
+
+        $this->listener($logger, true)->process($this->event('GET', ['key'], 'value'));
+    }
+
+    public function testDisabledCollectorAndUnrelatedEventsDoNotLog(): void
+    {
+        $logger = $this->createMock(CollectorLoggerInterface::class);
+        $logger->expects(self::never())->method('info');
+        $listener = new RedisLogListener(new LogConfig(new Config([])), $logger);
+
+        $listener->process(new \stdClass());
+        $listener->process($this->event('GET', ['key'], 'value'));
+    }
+
     private function listener(CollectorLoggerInterface $logger, bool $response = false): RedisLogListener
     {
         return new RedisLogListener(new LogConfig(new Config(['trace_log' => ['collectors' => [
