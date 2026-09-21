@@ -18,7 +18,7 @@ final readonly class PayloadProtection
         public ?int $originalBytes = null,
     ) {}
 
-    /** @return array<string, int|string> */
+    /** @return array{path:string,action:string,reason:string,limit_bytes?:int,original_bytes?:int} */
     public function toArray(): array
     {
         $result = [

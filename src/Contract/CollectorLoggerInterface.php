@@ -10,7 +10,8 @@ use Sllhsmile\HyperfLog\Support\LogOrigin;
 /**
  * 四类采集器共用的日志写入边界。
  *
- * 实现应隔离内容处理和 Handler 异常，采集失败不得改变业务请求结果。
+ * 实现应隔离内容处理和 Handler 异常，采集失败不得改变业务请求结果。origin 省略时由
+ * 实现捕获提交位置；可能跨协程完成的操作必须显式传入发起位置的 LogOrigin。
  */
 interface CollectorLoggerInterface
 {

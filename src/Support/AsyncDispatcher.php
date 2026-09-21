@@ -13,9 +13,12 @@ use Sllhsmile\HyperfLog\Enum\Collector;
 use Throwable;
 
 /**
- * One bounded, per-worker consumer. Swoole channels are count bounded, so byte
- * accounting is maintained separately and the channel capacity is only a
- * derived safety ceiling.
+ * 为每个 CollectorLogger 实例管理单一有界消费队列，并串行化 Handler 写入。
+ *
+ * 只有协程内的 async 提交才进入队列；sync 或非协程调用直接写入。消费协程首次提交时
+ * 惰性创建，并阻塞等待后续任务，直到 drain 关闭队列。Swoole Channel 只能限制条目数，
+ * 因此另行维护估算字节预算；Channel capacity 只是按最小条目大小推导的安全上限。
+ * 预算或 Channel 暂时满载时等待 1ms 后重试，仍失败则在提交协程同步回退，不静默丢弃。
  */
 final class AsyncDispatcher
 {
@@ -57,6 +60,7 @@ final class AsyncDispatcher
         $this->writeSerialized($entry);
     }
 
+    /** 按 write_mode 选择直接写入或提交异步队列。 */
     public function submit(LogEntry $entry): void
     {
         if (! Coroutine::inCoroutine() || $this->config->writeMode() === WriteMode::SYNC) {
@@ -125,6 +129,10 @@ final class AsyncDispatcher
         $this->startConsumer();
     }
 
+    /**
+     * 停止接收新异步任务并最多等待 3 秒；超时后丢弃仍在队列中的条目并报告统计。
+     * 已进入 Handler 的任务不能强制中断，调用方应在 Worker/CLI 退出阶段调用。
+     */
     public function drain(): void
     {
         $this->beginDrain();
@@ -140,6 +148,7 @@ final class AsyncDispatcher
                 $this->consume();
             }) >= 0;
         } catch (Throwable) {
+            // 协程额度耗尽等创建失败由 submit() 检测，并在调用协程同步回退。
             $this->consumerRunning = false;
         }
     }
@@ -153,7 +162,7 @@ final class AsyncDispatcher
             return false;
         }
 
-        // No yield occurs between the reservation and the non-blocking push.
+        // 预算预留与非阻塞 push 之间不会让出协程，可作为同一临界区更新计数。
         $this->reservedBytes += $entry->estimatedBytes;
         ++$this->queuedEntries;
         if ($this->queue->push($entry, 0)) {
@@ -283,6 +292,10 @@ final class AsyncDispatcher
         ));
     }
 
+    /**
+     * 所有消费与同步回退共用同一写入门，避免并发进入非协程安全的 Handler。
+     * Handler 在同一协程递归产生日志时直接抑制，否则会等待自己持有的门而死锁。
+     */
     private function writeSerialized(LogEntry $entry): void
     {
         $coroutineId = Coroutine::id();
@@ -290,7 +303,7 @@ final class AsyncDispatcher
             ++$this->failures;
             $this->report(sprintf(
                 'hyperf-log recursive handler write suppressed request_id=%s',
-                $entry->metadata->requestId ?? 'unavailable',
+                $entry->metadata->origin->requestId ?? 'unavailable',
             ));
             return;
         }
@@ -337,7 +350,7 @@ final class AsyncDispatcher
                 'hyperf-log %s write failed: %s request_id=%s',
                 $entry->metadata->collector->value,
                 $exception::class,
-                $entry->metadata->requestId ?? 'unavailable',
+                $entry->metadata->origin->requestId ?? 'unavailable',
             ));
         }
     }

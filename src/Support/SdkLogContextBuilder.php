@@ -13,7 +13,8 @@ use Throwable;
  * 分两阶段构建 Guzzle 日志上下文。
  *
  * request() 必须在请求交给 handler 前执行；complete() 在 Promise 完成后合并响应、异常、
- * 耗时和两阶段产生的 payload 保护信息。
+ * 耗时和两阶段产生的 payload 保护信息。response_enabled=false 只省略响应 Header 与 body，
+ * 真实 HTTP status_code 始终保留用于日志判级。
  */
 final readonly class SdkLogContextBuilder
 {

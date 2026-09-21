@@ -10,7 +10,7 @@ return [
     'request_id_header' => 'x-b3-traceid',
     // null 跟随 logger.default；也可填写 logger.channels 中已有的 channel 名称。
     'logger_channel' => null,
-    // sync 是可靠基线；async 使用每 Worker 一个有界队列和消费协程。
+    // sync 是可靠基线；async 在协程环境使用每 Worker 一个有界队列和常驻消费协程。
     'write_mode' => WriteMode::SYNC,
     'async' => [
         // 队列内容的估算字节预算，不代表 PHP Worker 的 RSS 硬限制。

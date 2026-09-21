@@ -14,7 +14,12 @@ use Sllhsmile\HyperfLog\Contract\PayloadProcessorInterface;
 use Sllhsmile\HyperfLog\Enum\Collector;
 use Throwable;
 
-/** Creates immutable event snapshots and delegates delivery to the dispatcher. */
+/**
+ * 在调用方执行单元中完成内容保护和提交快照，再交给 dispatcher 写入。
+ *
+ * async 只异步化 Handler IO，脱敏、限流、时间与链路来源都在提交前确定。准备或写入失败
+ * 只报告内部错误，不向业务调用方传播。
+ */
 final readonly class CollectorLogger implements CollectorLoggerInterface
 {
     public function __construct(
@@ -32,6 +37,7 @@ final readonly class CollectorLogger implements CollectorLoggerInterface
 
     private readonly AsyncDispatcher $dispatcher;
 
+    /** 停止接收异步任务并等待已有任务完成；同步模式下无操作。 */
     public function drain(): void
     {
         $this->dispatcher->drain();
@@ -87,7 +93,7 @@ final readonly class CollectorLogger implements CollectorLoggerInterface
             $encoded = json_encode($context, JSON_PARTIAL_OUTPUT_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
             $estimatedBytes = max(1024, (is_string($encoded) ? strlen($encoded) : 0) + 512);
             $this->dispatcher->submit(new LogEntry(
-                new LogMetadata($collector, $origin->requestId, $origin->coroutineId),
+                new LogMetadata($collector, $origin),
                 $level,
                 $context,
                 $datetime,

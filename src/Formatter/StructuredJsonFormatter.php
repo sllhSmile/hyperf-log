@@ -18,7 +18,9 @@ use Sllhsmile\HyperfLog\Support\LogMetadata;
  *
  * 内部采集日志使用扁平结构；普通应用日志保留 message 和嵌套 context。采集器身份只认
  * CollectorLogger 写入的元数据标记，避免业务 message 恰好等于 http.server 等类型时误判。
- * timestamp 固定转换为 Asia/Shanghai，便于当前业务日志直接检索和比对。
+ * 采集日志的 request-id 与 coroutine-id 使用提交时快照，不能改读异步消费协程的 Context；
+ * 普通应用日志没有该元数据时才读取格式化时的当前 Context。timestamp 固定转换为
+ * Asia/Shanghai，便于当前业务日志直接检索和比对。
  */
 final class StructuredJsonFormatter extends JsonFormatter
 {
@@ -66,13 +68,13 @@ final class StructuredJsonFormatter extends JsonFormatter
         }
         $requestId = $metadata === null
             ? $this->requestContext->id()
-            : $metadata->requestId;
+            : $metadata->origin->requestId;
         if ($requestId !== null) {
             $output['request_id'] = $requestId;
         }
         $coroutineId = $metadata === null
             ? Coroutine::id()
-            : $metadata->coroutineId;
+            : $metadata->origin->coroutineId;
         if ($coroutineId >= 0) {
             $output['coroutine_id'] = $coroutineId;
         }

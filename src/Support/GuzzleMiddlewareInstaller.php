@@ -19,7 +19,11 @@ use Throwable;
  * 为 Guzzle HandlerStack 安装 request-id 透传和 SDK 日志采集。
  *
  * 本类不设置 timeout、connect_timeout 或 swoole 选项，调用方配置会原样传给下一层
- * handler。同步异常与 Promise rejection 都会记录后保持原始失败语义。
+ * handler。关闭 SDK 采集也不会关闭 request-id 透传。采集成功建立后，同步异常与
+ * Promise rejection 都会记录，并保持原始失败语义。
+ *
+ * Promise 回调可能在不同协程完成，因此发起请求时必须同时捕获 LogOrigin；提交 SDK
+ * 日志时显式传回该快照，不能从完成协程重新读取 RequestContext。
  */
 final readonly class GuzzleMiddlewareInstaller
 {
@@ -85,7 +89,11 @@ final readonly class GuzzleMiddlewareInstaller
         };
     }
 
-    /** @param array<string, mixed> $request */
+    /**
+     * 隔离上下文构建与日志提交异常，采集失败不得改变 Guzzle Promise 的结果。
+     *
+     * @param array<string, mixed> $request
+     */
     private function writeSafely(
         array $request,
         float $startedAt,
@@ -95,7 +103,13 @@ final readonly class GuzzleMiddlewareInstaller
     ): void {
         try {
             $context = $this->contextBuilder->complete($request, $startedAt, $response, $reason);
-            HttpLogLevel::write($this->logger, Collector::Sdk, $context, $origin);
+            LogLevelDispatcher::write(
+                $this->logger,
+                HttpLogLevel::resolve($context['response']['status_code'] ?? null, isset($context['error'])),
+                Collector::Sdk,
+                $context,
+                $origin,
+            );
         } catch (Throwable $exception) {
             $this->reportFailure($exception, $origin->requestId);
         }

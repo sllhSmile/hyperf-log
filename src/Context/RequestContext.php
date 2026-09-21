@@ -18,7 +18,8 @@ final class RequestContext
     public const CONTEXT_KEY = self::class;
 
     /**
-     * 开始一条新链路；没有有效上游 ID 时生成按时间有序的 UUID v7。
+     * 开始一条新链路；传入值 trim 后为空时生成按时间有序的 UUID v7。
+     * 非空 ID 使用 trim 后的值，本类不校验其格式或可信来源。
      */
     public function start(?string $requestId = null): TraceContext
     {

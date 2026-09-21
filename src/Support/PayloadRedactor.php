@@ -9,10 +9,12 @@ use Sllhsmile\HyperfLog\Enum\PayloadAction;
 use Sllhsmile\HyperfLog\Enum\PayloadReason;
 
 /**
- * 按字段名递归处理 HTTP server/client 的 Header、URL query 和 body。
+ * 按字段名处理 HTTP server/client 的 Header、URL query 和结构化 body。
  *
  * 字段匹配不区分大小写。显式 JSON 无法解析时采用 fail-closed：省略原正文并写入
- * payload_protection，避免格式错误的敏感内容绕过结构化脱敏。
+ * payload_protection，避免格式错误的敏感内容绕过结构化脱敏。表单与 JSON 字符串会
+ * 解析后处理；其他明确 Content-Type 的纯文本或二进制正文不会按内容猜测字段，只应用
+ * 后续容量限制。
  */
 final readonly class PayloadRedactor
 {

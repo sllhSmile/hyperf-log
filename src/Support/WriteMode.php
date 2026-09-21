@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Sllhsmile\HyperfLog\Support;
 
-/** Supported trace_log.write_mode values. */
+/** trace_log.write_mode 接受的稳定字符串值。 */
 final class WriteMode
 {
     public const SYNC = 'sync';

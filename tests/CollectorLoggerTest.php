@@ -81,8 +81,8 @@ final class CollectorLoggerTest extends TestCase
             'http.client',
             self::callback(static fn(array $context): bool =>
                 $context[Collector::LOG_METADATA_KEY] instanceof LogMetadata
-                && $context[Collector::LOG_METADATA_KEY]->requestId === 'request-trace'
-                && $context[Collector::LOG_METADATA_KEY]->coroutineId === 123),
+                && $context[Collector::LOG_METADATA_KEY]->origin->requestId === 'request-trace'
+                && $context[Collector::LOG_METADATA_KEY]->origin->coroutineId === 123),
         );
         $factory = $this->createMock(LoggerFactory::class);
         $factory->method('get')->willReturn($psrLogger);
@@ -139,7 +139,7 @@ final class CollectorLoggerTest extends TestCase
             function (string $message, array $context) use (&$writerCoroutineId, &$writerRequestId): void {
                 $writerCoroutineId = SwooleCoroutine::getCid();
                 $metadata = $context[Collector::LOG_METADATA_KEY];
-                $writerRequestId = $metadata instanceof LogMetadata ? $metadata->requestId : null;
+                $writerRequestId = $metadata instanceof LogMetadata ? $metadata->origin->requestId : null;
             },
         );
         $factory = $this->createMock(LoggerFactory::class);
@@ -306,7 +306,7 @@ final class CollectorLoggerTest extends TestCase
             static function (string $message, array $context) use (&$seen): void {
                 SwooleCoroutine::sleep(0.001);
                 $metadata = $context[Collector::LOG_METADATA_KEY];
-                $seen[$context['sequence']] = $metadata instanceof LogMetadata ? $metadata->requestId : null;
+                $seen[$context['sequence']] = $metadata instanceof LogMetadata ? $metadata->origin->requestId : null;
             },
         );
         $factory = $this->createMock(LoggerFactory::class);

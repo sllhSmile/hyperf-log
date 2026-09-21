@@ -9,10 +9,11 @@ use Sllhsmile\HyperfLog\Enum\PayloadAction;
 use Sllhsmile\HyperfLog\Enum\PayloadReason;
 
 /**
- * 对各采集器允许出现的大字段执行统一字节上限。
+ * 对各采集器约定的大字段逐字段执行统一字节上限。
  *
  * 文本保留 UTF-8 安全预览并标记 truncated；数组等结构化值整体省略，避免截断后产生
- * 看似完整但语义错误的数据。每次保护动作都会追加到 payload_protection。
+ * 看似完整但语义错误的数据。该限制不是整条日志的总大小上限；每次保护动作都会追加到
+ * payload_protection。
  */
 final readonly class PayloadLimiter
 {

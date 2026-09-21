@@ -7,7 +7,12 @@ namespace Sllhsmile\HyperfLog\Support;
 use Monolog\JsonSerializableDateTimeImmutable;
 use Monolog\Level;
 
-/** Immutable event snapshot used by both synchronous and asynchronous writes. */
+/**
+ * 同步与异步写入共用的不可变提交单元。
+ *
+ * datetime 与 origin 均在提交方捕获，异步消费时不得改用消费协程的时间或 Context。
+ * estimatedBytes 只用于队列预算，并非 PHP 对象的精确内存占用。
+ */
 final readonly class LogEntry
 {
     /** @param array<string, mixed> $context */

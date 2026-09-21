@@ -15,6 +15,7 @@ use Sllhsmile\HyperfLog\Enum\Collector;
 use Sllhsmile\HyperfLog\Formatter\StructuredJsonFormatter;
 use Sllhsmile\HyperfLog\Support\LogConfig;
 use Sllhsmile\HyperfLog\Support\LogMetadata;
+use Sllhsmile\HyperfLog\Support\LogOrigin;
 
 final class StructuredJsonFormatterTest extends TestCase
 {
@@ -38,7 +39,7 @@ final class StructuredJsonFormatterTest extends TestCase
                 'request_id' => 'evil',
                 'duration_ms' => 12.35,
                 'response' => null,
-                Collector::LOG_METADATA_KEY => new LogMetadata(Collector::Api, 'trace-id', 12),
+                Collector::LOG_METADATA_KEY => new LogMetadata(Collector::Api, new LogOrigin('trace-id', 12)),
             ],
         );
 
@@ -77,7 +78,7 @@ final class StructuredJsonFormatterTest extends TestCase
             Level::Warning,
             'http.server',
             [
-                Collector::LOG_METADATA_KEY => new LogMetadata(Collector::Api, 'submission-trace', 42),
+                Collector::LOG_METADATA_KEY => new LogMetadata(Collector::Api, new LogOrigin('submission-trace', 42)),
             ],
         );
 

@@ -19,6 +19,7 @@ final readonly class RedisLogListener implements ListenerInterface
 {
     public function __construct(private LogConfig $config, private CollectorLoggerInterface $logger) {}
 
+    /** @return class-string[] */
     public function listen(): array
     {
         return [CommandExecuted::class];

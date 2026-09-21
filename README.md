@@ -206,6 +206,12 @@ Guzzle 客户端会自动透传当前 request ID，并在启用 SDK 采集器时
 
 自动安装仅针对 `HandlerStack`；自定义裸 handler 不会被替换。Redis 采集依赖 Hyperf Redis 的 `CommandExecuted` 事件，宿主须启用 Redis 事件（通常为 `REDIS_EVENT_ENABLE=true`），只打开本包开关不足以产生 Redis 日志。
 
+## 从 0.8.0 升级（0.8.1 开发中）
+
+`CollectorLoggerInterface` 的八个方法及 `?LogOrigin` 参数不变，日志 JSON 结构也不变。内部 `LogMetadata` 改为组合来源快照：直接读取此类型的扩展需要从 `$metadata->requestId` / `$metadata->coroutineId` 改为 `$metadata->origin->requestId` / `$metadata->origin->coroutineId`。
+
+新增公开类型 `Sllhsmile\HyperfLog\Support\HttpStatusClass`，`tryFromStatusCode(int): ?self` 将 100–599 归为五类，范围外返回 `null`。HTTP 日志判级按类别决定：4xx 为 WARNING、5xx 为 ERROR、其他为 INFO；异常始终优先记为 ERROR。缺失、非整数或范围外的状态码按 INFO 处理，不会中断业务请求。
+
 ## 从 0.7.1 升级
 
 0.8 保持 Schema 1，但默认写入模式由 `async` 改为 `sync`，并移除每日志子协程。需要异步写入时显式设置 `write_mode=async`，可通过 `async.max_buffer_bytes` 调整每 Worker 的队列预算。`CollectorLoggerInterface` 新增七个级别方法及可选 `LogOrigin` 参数；自定义实现必须补齐八级接口并保持完整签名。

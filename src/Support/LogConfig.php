@@ -10,8 +10,8 @@ use Sllhsmile\HyperfLog\Enum\Collector;
 /**
  * trace_log 配置的类型化读取边界。
  *
- * 采集器默认全部关闭；API 响应默认开启，其余响应默认关闭。可能导致保护失效的 payload
- * 配置采用 fail-fast 校验，避免静默回退到不安全值。
+ * 采集器默认全部关闭；API 响应默认开启，其余响应默认关闭。布尔开关与 Header 名称在
+ * 构造时校验，其余配置在首次读取时严格校验；非法类型会抛出异常，不做宽松类型转换。
  */
 final readonly class LogConfig
 {
@@ -104,7 +104,7 @@ final readonly class LogConfig
         return (string) $this->config->get('app_name', $this->config->get('app_env', ''));
     }
 
-    /** @return string[] */
+    /** @return list<string> 规范化为小写并去重的敏感字段名 */
     public function payloadSensitiveFields(): array
     {
         $fields = $this->config->get('trace_log.payload.sensitive_fields', self::DEFAULT_SENSITIVE_FIELDS);

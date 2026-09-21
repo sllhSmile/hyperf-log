@@ -15,14 +15,20 @@ use Sllhsmile\HyperfLog\Contract\CollectorLoggerInterface;
 use Sllhsmile\HyperfLog\Enum\Collector;
 use Sllhsmile\HyperfLog\Support\HttpLogLevel;
 use Sllhsmile\HyperfLog\Support\LogConfig;
+use Sllhsmile\HyperfLog\Support\LogLevelDispatcher;
 use Sllhsmile\HyperfLog\Support\PayloadSnapshotter;
 
 /**
  * 在 Hyperf 完成 HTTP 请求后采集 server 日志。
  *
- * PSR-7 body 必须在当前请求协程内完成安全快照，再交给 CollectorLogger 异步处理；
- * response_enabled=false 时不会读取响应流。流读取和 Handler 写入失败会分别降级为
- * payload_protection 与内部错误日志，不改变业务响应。
+ * PSR-7 body 必须在当前请求协程内完成安全快照；CollectorLogger 随后在提交前执行内容
+ * 保护，并可将 Handler IO 交给异步队列。response_enabled=false 时不会读取响应流。
+ * 流读取和 Handler 写入失败会分别降级为 payload_protection 与内部错误日志，不改变
+ * 业务响应。
+ *
+ * RequestHandled::exception 是 Hyperf Server 捕获的原始 Throwable；即使异常处理器已经
+ * 生成响应，该字段仍然存在并优先判为 ERROR。状态码只读取 PSR-7 Response 的真实 HTTP
+ * status，不读取响应 body 中的业务码。
  */
 final readonly class ApiLogListener implements ListenerInterface
 {
@@ -33,6 +39,7 @@ final readonly class ApiLogListener implements ListenerInterface
         private PayloadSnapshotter $snapshotter,
     ) {}
 
+    /** @return class-string[] */
     public function listen(): array
     {
         return [RequestHandled::class];
@@ -67,7 +74,12 @@ final readonly class ApiLogListener implements ListenerInterface
             $context['payload_protection'] = $protections;
         }
 
-        HttpLogLevel::write($this->logger, Collector::Api, $context);
+        LogLevelDispatcher::write(
+            $this->logger,
+            HttpLogLevel::resolve($context['response']['status_code'] ?? null, isset($context['error'])),
+            Collector::Api,
+            $context,
+        );
     }
 
     /**
