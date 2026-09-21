@@ -7,6 +7,7 @@ namespace Sllhsmile\HyperfLog\Support;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Promise\Create;
 use GuzzleHttp\Promise\PromiseInterface;
+use Hyperf\Coroutine\Coroutine;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
 use Sllhsmile\HyperfLog\Context\RequestContext;
@@ -41,6 +42,7 @@ final readonly class GuzzleMiddlewareInstaller
         return function (callable $handler): callable {
             return function (RequestInterface $request, array $options) use ($handler): PromiseInterface {
                 $requestId = $this->requestContext->id();
+                $origin = new LogOrigin($requestId, Coroutine::id());
                 if ($requestId !== null) {
                     $request = $request->withHeader($this->config->requestIdHeader(), $requestId);
                 }
@@ -60,20 +62,20 @@ final readonly class GuzzleMiddlewareInstaller
                 try {
                     $promise = Create::promiseFor($handler($request, $options));
                 } catch (Throwable $reason) {
-                    $this->writeSafely($requestSnapshot, $startedAt, null, $reason, $requestId);
+                    $this->writeSafely($requestSnapshot, $startedAt, null, $reason, $origin);
                     throw $reason;
                 }
 
                 return $promise->then(
-                    function (mixed $response) use ($requestSnapshot, $startedAt, $requestId): mixed {
+                    function (mixed $response) use ($requestSnapshot, $startedAt, $origin): mixed {
                         if ($response instanceof ResponseInterface) {
-                            $this->writeSafely($requestSnapshot, $startedAt, $response, null, $requestId);
+                            $this->writeSafely($requestSnapshot, $startedAt, $response, null, $origin);
                         }
 
                         return $response;
                     },
-                    function (mixed $reason) use ($requestSnapshot, $startedAt, $requestId): PromiseInterface {
-                        $this->writeSafely($requestSnapshot, $startedAt, null, $reason, $requestId);
+                    function (mixed $reason) use ($requestSnapshot, $startedAt, $origin): PromiseInterface {
+                        $this->writeSafely($requestSnapshot, $startedAt, null, $reason, $origin);
 
                         // 返回 rejection 而不是抛出新异常，保留 Guzzle Promise 的失败链。
                         return Create::rejectionFor($reason);
@@ -89,12 +91,13 @@ final readonly class GuzzleMiddlewareInstaller
         float $startedAt,
         ?ResponseInterface $response,
         mixed $reason,
-        ?string $requestId,
+        LogOrigin $origin,
     ): void {
         try {
-            $this->logger->info(Collector::Sdk, $this->contextBuilder->complete($request, $startedAt, $response, $reason));
+            $context = $this->contextBuilder->complete($request, $startedAt, $response, $reason);
+            HttpLogLevel::write($this->logger, Collector::Sdk, $context, $origin);
         } catch (Throwable $exception) {
-            $this->reportFailure($exception, $requestId);
+            $this->reportFailure($exception, $origin->requestId);
         }
     }
 

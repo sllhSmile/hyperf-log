@@ -10,6 +10,7 @@ use Sllhsmile\HyperfLog\Contract\PayloadProcessorInterface;
 use Sllhsmile\HyperfLog\Listener\ApiLogListener;
 use Sllhsmile\HyperfLog\Listener\CommandTraceListener;
 use Sllhsmile\HyperfLog\Listener\DatabaseLogListener;
+use Sllhsmile\HyperfLog\Listener\DispatcherLifecycleListener;
 use Sllhsmile\HyperfLog\Listener\RedisLogListener;
 use Sllhsmile\HyperfLog\Middleware\LogMiddleware;
 use Sllhsmile\HyperfLog\Support\CollectorLogger;
@@ -37,6 +38,7 @@ final class ConfigProvider
                 CommandTraceListener::class,
                 DatabaseLogListener::class,
                 RedisLogListener::class,
+                DispatcherLifecycleListener::class,
             ],
             'aspects' => [
                 GuzzleLogAspect::class,

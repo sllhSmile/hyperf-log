@@ -74,7 +74,7 @@ if (! isset($options['worker'])) {
                     throw new RuntimeException('Invalid benchmark worker result.');
                 }
                 if ($exitMode === 'immediate') {
-                    // 模拟进程终止，不等待仍在写入的采集子协程；不是优雅退出测试。
+                    // 模拟进程终止，不等待异步队列；不是优雅退出测试。
                     proc_terminate($process);
                 }
                 fclose($pipes[1]);
@@ -203,6 +203,7 @@ $result = [];
                 throw new RuntimeException('Timed out waiting for benchmark writes.');
             }
         }
+        $logger->drain();
     }
     $elapsedMs = (hrtime(true) - $startedAt) / 1000000;
     $result = [
@@ -216,7 +217,7 @@ $result = [];
     if ($exitMode === 'immediate') {
         echo json_encode($result, JSON_THROW_ON_ERROR) . PHP_EOL;
         fflush(STDOUT);
-        // 等待父进程立即终止本进程，不主动 drain 采集协程。
+        // 等待父进程立即终止本进程，不主动 drain 异步队列。
         (new Channel(1))->pop();
     }
 });

@@ -15,19 +15,28 @@ use Sllhsmile\HyperfLog\Enum\Collector;
  */
 final readonly class LogConfig
 {
-    private const WRITE_MODES = ['async', 'sync'];
+    public const DEFAULT_ASYNC_MAX_BUFFER_BYTES = 8 * 1024 * 1024;
 
-    private const DEFAULT_SENSITIVE_FIELDS = [
+    private const WRITE_MODES = [WriteMode::ASYNC, WriteMode::SYNC];
+
+    public const DEFAULT_SENSITIVE_FIELDS = [
         'authorization', 'proxy-authorization', 'cookie', 'set-cookie', 'x-api-key',
         'password', 'passwd', 'token', 'access_token', 'refresh_token', 'api_key',
         'api-key', 'secret', 'client_secret',
     ];
 
-    public function __construct(private ConfigInterface $config) {}
+    public function __construct(private ConfigInterface $config)
+    {
+        foreach (Collector::cases() as $collector) {
+            $this->enabled($collector);
+            $this->responseEnabled($collector);
+        }
+        $this->requestIdHeader();
+    }
 
     public function enabled(Collector $collector): bool
     {
-        return (bool) $this->collectorValue($collector, 'enabled', false);
+        return $this->collectorBoolean($collector, 'enabled', false);
     }
 
     public function anyEnabled(): bool
@@ -56,7 +65,7 @@ final readonly class LogConfig
 
     public function writeMode(): string
     {
-        $mode = $this->config->get('trace_log.write_mode', 'async');
+        $mode = $this->config->get('trace_log.write_mode', WriteMode::SYNC);
         if (! is_string($mode) || ! in_array($mode, self::WRITE_MODES, true)) {
             throw new \InvalidArgumentException('trace_log.write_mode must be either "async" or "sync".');
         }
@@ -64,15 +73,30 @@ final readonly class LogConfig
         return $mode;
     }
 
+    public function asyncMaxBufferBytes(): int
+    {
+        $bytes = $this->config->get('trace_log.async.max_buffer_bytes', self::DEFAULT_ASYNC_MAX_BUFFER_BYTES);
+        if (! is_int($bytes) || $bytes < 1024) {
+            throw new \InvalidArgumentException('trace_log.async.max_buffer_bytes must be an integer greater than or equal to 1024.');
+        }
+
+        return $bytes;
+    }
+
     public function responseEnabled(Collector $collector): bool
     {
-        return (bool) $this->collectorValue($collector, 'response_enabled', $collector === Collector::Api);
+        return $this->collectorBoolean($collector, 'response_enabled', $collector === Collector::Api);
     }
 
     public function requestIdHeader(): string
     {
+        $header = $this->config->get('trace_log.request_id_header', 'x-b3-traceid');
+        if (! is_string($header) || preg_match('/^[!#$%&\'*+\-.^_`|~0-9A-Za-z]+$/D', $header) !== 1) {
+            throw new \InvalidArgumentException('trace_log.request_id_header must be a valid non-empty HTTP header name.');
+        }
+
         // PSR-7 Header 大小写不敏感，统一小写可稳定日志字段和测试输出。
-        return strtolower((string) $this->config->get('trace_log.request_id_header', 'x-b3-traceid'));
+        return strtolower($header);
     }
 
     public function service(): string
@@ -125,6 +149,20 @@ final readonly class LogConfig
     private function collectorValue(Collector $collector, string $key, mixed $default): mixed
     {
         return $this->config->get("trace_log.collectors.{$collector->value}.{$key}", $default);
+    }
+
+    private function collectorBoolean(Collector $collector, string $key, bool $default): bool
+    {
+        $value = $this->collectorValue($collector, $key, $default);
+        if (! is_bool($value)) {
+            throw new \InvalidArgumentException(sprintf(
+                'trace_log.collectors.%s.%s must be a boolean.',
+                $collector->value,
+                $key,
+            ));
+        }
+
+        return $value;
     }
 
 }

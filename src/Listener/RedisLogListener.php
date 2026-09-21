@@ -46,6 +46,10 @@ final readonly class RedisLogListener implements ListenerInterface
             $context['response'] = ['body' => $event->result];
         }
 
-        $this->logger->info(Collector::Redis, $context);
+        if ($event->throwable !== null) {
+            $this->logger->error(Collector::Redis, $context);
+        } else {
+            $this->logger->info(Collector::Redis, $context);
+        }
     }
 }

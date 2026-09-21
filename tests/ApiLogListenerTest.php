@@ -12,6 +12,7 @@ use Hyperf\Config\Config;
 use Hyperf\Context\Context;
 use Hyperf\HttpServer\Event\RequestHandled;
 use PHPUnit\Framework\TestCase;
+use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\StreamInterface;
 use RuntimeException;
 use Sllhsmile\HyperfLog\Context\RequestContext;
@@ -51,20 +52,18 @@ final class ApiLogListenerTest extends TestCase
         self::assertSame(2, $responseBody->tell());
     }
 
-    public function testDisabledResponseIsEntirelyOmitted(): void
+    public function testDisabledResponseKeepsOnlyStatusWithoutReadingDetails(): void
     {
-        $stream = $this->createMock(StreamInterface::class);
-        $stream->expects(self::never())->method('getContents');
-        $stream->expects(self::never())->method('isSeekable');
+        $response = $this->createMock(ResponseInterface::class);
+        $response->expects(self::once())->method('getStatusCode')->willReturn(200);
+        $response->expects(self::never())->method('getHeaders');
+        $response->expects(self::never())->method('getBody');
         $logger = $this->createMock(CollectorLoggerInterface::class);
         $logger->expects(self::once())->method('info')->with(
             Collector::Api,
-            self::callback(static fn(array $value): bool => ! array_key_exists('response', $value)),
+            self::callback(static fn(array $value): bool => $value['response'] === ['status_code' => 200]),
         );
-        $this->listener($logger, false)->process(new RequestHandled(
-            new ServerRequest('GET', '/'),
-            (new Response())->withBody($stream),
-        ));
+        $this->listener($logger, false)->process(new RequestHandled(new ServerRequest('GET', '/'), $response));
     }
 
     public function testNonRewindableBodyIsOmittedWithReasonAndNotConsumed(): void
@@ -88,7 +87,7 @@ final class ApiLogListenerTest extends TestCase
     {
         (new RequestContext())->start('api-trace');
         $logger = $this->createMock(CollectorLoggerInterface::class);
-        $logger->expects(self::once())->method('info')->with(
+        $logger->expects(self::once())->method('error')->with(
             Collector::Api,
             self::callback(static fn(array $value): bool =>
                 $value['error']['type'] === RuntimeException::class
@@ -100,6 +99,46 @@ final class ApiLogListenerTest extends TestCase
             new ServerRequest('GET', '/'),
             new Response(500),
             new RuntimeException('business failed', 7),
+        ));
+    }
+
+    public function testClientErrorUsesWarningLevel(): void
+    {
+        $logger = $this->createMock(CollectorLoggerInterface::class);
+        $logger->expects(self::once())->method('warning')->with(Collector::Api, self::anything());
+
+        $this->listener($logger)->process(new RequestHandled(
+            new ServerRequest('GET', '/'),
+            new Response(404),
+        ));
+    }
+
+    public function testResponseDisabledStillUsesStatusForLevelMapping(): void
+    {
+        $response = $this->createMock(ResponseInterface::class);
+        $response->expects(self::once())->method('getStatusCode')->willReturn(503);
+        $response->expects(self::never())->method('getHeaders');
+        $response->expects(self::never())->method('getBody');
+        $logger = $this->createMock(CollectorLoggerInterface::class);
+        $logger->expects(self::once())->method('error')->with(
+            Collector::Api,
+            self::callback(static fn(array $value): bool => $value['response'] === ['status_code' => 503]),
+        );
+
+        $this->listener($logger, false)->process(new RequestHandled(new ServerRequest('GET', '/'), $response));
+    }
+
+    public function testResponseDisabledStillMapsClientErrorToWarning(): void
+    {
+        $logger = $this->createMock(CollectorLoggerInterface::class);
+        $logger->expects(self::once())->method('warning')->with(
+            Collector::Api,
+            self::callback(static fn(array $value): bool => $value['response'] === ['status_code' => 404]),
+        );
+
+        $this->listener($logger, false)->process(new RequestHandled(
+            new ServerRequest('GET', '/'),
+            new Response(404),
         ));
     }
 

@@ -81,4 +81,5 @@ final class DatabaseLogListenerTest extends TestCase
         $listener->process(new \stdClass());
         $listener->process(new QueryExecuted('select ?', [1], 2.5, $this->connection()));
     }
+
 }

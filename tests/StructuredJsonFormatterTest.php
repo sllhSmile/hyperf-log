@@ -14,6 +14,7 @@ use Sllhsmile\HyperfLog\Context\RequestContext;
 use Sllhsmile\HyperfLog\Enum\Collector;
 use Sllhsmile\HyperfLog\Formatter\StructuredJsonFormatter;
 use Sllhsmile\HyperfLog\Support\LogConfig;
+use Sllhsmile\HyperfLog\Support\LogMetadata;
 
 final class StructuredJsonFormatterTest extends TestCase
 {
@@ -37,7 +38,7 @@ final class StructuredJsonFormatterTest extends TestCase
                 'request_id' => 'evil',
                 'duration_ms' => 12.35,
                 'response' => null,
-                Collector::LOG_CONTEXT_KEY => Collector::Api,
+                Collector::LOG_METADATA_KEY => new LogMetadata(Collector::Api, 'trace-id', 12),
             ],
         );
 
@@ -49,7 +50,7 @@ final class StructuredJsonFormatterTest extends TestCase
         self::assertSame('trace-id', $result['request_id']);
         self::assertSame(12.35, $result['duration_ms']);
         self::assertArrayNotHasKey('response', $result);
-        self::assertArrayNotHasKey(Collector::LOG_CONTEXT_KEY, $result);
+        self::assertArrayNotHasKey(Collector::LOG_METADATA_KEY, $result);
     }
 
     public function testTimestampIsAlwaysRenderedInAsiaShanghai(): void
@@ -64,6 +65,29 @@ final class StructuredJsonFormatterTest extends TestCase
         $result = json_decode($this->formatter(new RequestContext())->format($record), true, 512, JSON_THROW_ON_ERROR);
 
         self::assertSame('2026-09-16 10:20:30.123456+08:00', $result['timestamp']);
+    }
+
+    public function testCollectorUsesSubmissionMetadataInsteadOfConsumerContext(): void
+    {
+        $requestContext = new RequestContext();
+        $requestContext->start('consumer-trace');
+        $record = new LogRecord(
+            new DateTimeImmutable('2026-09-16T02:20:30.123456+00:00'),
+            'apilog',
+            Level::Warning,
+            'http.server',
+            [
+                Collector::LOG_METADATA_KEY => new LogMetadata(Collector::Api, 'submission-trace', 42),
+            ],
+        );
+
+        $result = json_decode($this->formatter($requestContext)->format($record), true, 512, JSON_THROW_ON_ERROR);
+
+        self::assertSame('2026-09-16 10:20:30.123456+08:00', $result['timestamp']);
+        self::assertSame('WARNING', $result['level']);
+        self::assertSame('submission-trace', $result['request_id']);
+        self::assertSame(42, $result['coroutine_id']);
+        self::assertArrayNotHasKey(Collector::LOG_METADATA_KEY, $result);
     }
 
     public function testApplicationLogKeepsMessageAndNestedContext(): void

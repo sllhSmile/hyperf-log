@@ -10,6 +10,7 @@ use Sllhsmile\HyperfLog\Contract\CollectorLoggerInterface;
 use Sllhsmile\HyperfLog\Enum\Collector;
 use Sllhsmile\HyperfLog\Support\LogConfig;
 use Sllhsmile\HyperfLog\Support\SqlInterpolator;
+use Throwable;
 
 /**
  * 将 QueryExecuted 转换为 database.query 日志。
@@ -47,6 +48,10 @@ final readonly class DatabaseLogListener implements ListenerInterface
             $context['response'] = ['body' => $event->result];
         }
 
-        $this->logger->info(Collector::Database, $context);
+        if ($event->result instanceof Throwable) {
+            $this->logger->error(Collector::Database, $context);
+        } else {
+            $this->logger->info(Collector::Database, $context);
+        }
     }
 }

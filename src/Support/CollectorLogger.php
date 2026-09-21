@@ -6,87 +6,100 @@ namespace Sllhsmile\HyperfLog\Support;
 
 use Hyperf\Coroutine\Coroutine;
 use Hyperf\Logger\LoggerFactory;
+use Monolog\JsonSerializableDateTimeImmutable;
+use Monolog\Level;
 use Sllhsmile\HyperfLog\Context\RequestContext;
 use Sllhsmile\HyperfLog\Contract\CollectorLoggerInterface;
 use Sllhsmile\HyperfLog\Contract\PayloadProcessorInterface;
 use Sllhsmile\HyperfLog\Enum\Collector;
 use Throwable;
 
-/**
- * 统一执行采集日志的内容保护、异步调度和异常隔离。
- *
- * async 模式在 Hyperf 协程中 fork 子协程，并只复制 RequestContext 的 Context key；
- * sync 模式和非协程环境直接写入。异步调度失败时同步回退，所有处理和写入异常均在此
- * 终止，不向业务代码传播。异步方式不提供落盘确认，因此不适合作为审计日志。
- */
+/** Creates immutable event snapshots and delegates delivery to the dispatcher. */
 final readonly class CollectorLogger implements CollectorLoggerInterface
 {
     public function __construct(
-        private LoggerFactory $factory,
-        private LogConfig $config,
+        LoggerFactory $factory,
+        LogConfig $config,
         private RequestContext $requestContext,
         private PayloadProcessorInterface $payloadProcessor,
-    ) {}
+    ) {
+        $mode = $config->writeMode();
+        if ($mode === WriteMode::ASYNC) {
+            $config->asyncMaxBufferBytes();
+        }
+        $this->dispatcher = new AsyncDispatcher($factory, $config, $requestContext);
+    }
 
-    /** @param array<string, mixed> $context */
-    public function info(Collector $collector, array $context): void
+    private readonly AsyncDispatcher $dispatcher;
+
+    public function drain(): void
     {
-        if ($this->config->writeMode() === 'sync' || ! Coroutine::inCoroutine()) {
-            $this->safelyWrite($collector, $context);
-            return;
-        }
+        $this->dispatcher->drain();
+    }
 
-        try {
-            // 显式复制 request context，保证子协程 formatter 仍能取得当前 request-id。
-            $coroutineId = Coroutine::fork(
-                fn() => $this->safelyWrite($collector, $context),
-                [RequestContext::CONTEXT_KEY],
-            );
-            if ($coroutineId >= 0) {
-                return;
-            }
-            $this->reportDispatchFailure($collector);
-        } catch (Throwable $exception) {
-            $this->reportDispatchFailure($collector, $exception);
-        }
+    public function emergency(Collector $collector, array $context, ?LogOrigin $origin = null): void
+    {
+        $this->write(Level::Emergency, $collector, $context, $origin);
+    }
 
-        // 协程资源耗尽等调度失败场景优先保住日志，并继续隔离实际 Handler 异常。
-        $this->safelyWrite($collector, $context);
+    public function alert(Collector $collector, array $context, ?LogOrigin $origin = null): void
+    {
+        $this->write(Level::Alert, $collector, $context, $origin);
+    }
+
+    public function critical(Collector $collector, array $context, ?LogOrigin $origin = null): void
+    {
+        $this->write(Level::Critical, $collector, $context, $origin);
+    }
+
+    public function error(Collector $collector, array $context, ?LogOrigin $origin = null): void
+    {
+        $this->write(Level::Error, $collector, $context, $origin);
+    }
+
+    public function warning(Collector $collector, array $context, ?LogOrigin $origin = null): void
+    {
+        $this->write(Level::Warning, $collector, $context, $origin);
+    }
+
+    public function notice(Collector $collector, array $context, ?LogOrigin $origin = null): void
+    {
+        $this->write(Level::Notice, $collector, $context, $origin);
+    }
+
+    public function info(Collector $collector, array $context, ?LogOrigin $origin = null): void
+    {
+        $this->write(Level::Info, $collector, $context, $origin);
+    }
+
+    public function debug(Collector $collector, array $context, ?LogOrigin $origin = null): void
+    {
+        $this->write(Level::Debug, $collector, $context, $origin);
     }
 
     /** @param array<string, mixed> $context */
-    private function safelyWrite(Collector $collector, array $context): void
+    private function write(Level $level, Collector $collector, array $context, ?LogOrigin $origin): void
     {
+        $datetime = new JsonSerializableDateTimeImmutable(true);
+        $origin ??= new LogOrigin($this->requestContext->id(), Coroutine::id());
         try {
             $context = $this->payloadProcessor->process($collector, $context);
-            // 内容保护完成后再加入内部标记，避免标记参与脱敏和容量计算。
-            $context[Collector::LOG_CONTEXT_KEY] = $collector;
-            $this->factory->get(
-                $collector->defaultChannel(),
-                $this->config->loggerChannel(),
-            )->info($collector->type(), $context);
+            $encoded = json_encode($context, JSON_PARTIAL_OUTPUT_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+            $estimatedBytes = max(1024, (is_string($encoded) ? strlen($encoded) : 0) + 512);
+            $this->dispatcher->submit(new LogEntry(
+                new LogMetadata($collector, $origin->requestId, $origin->coroutineId),
+                $level,
+                $context,
+                $datetime,
+                $estimatedBytes,
+            ));
         } catch (Throwable $exception) {
-            $this->reportFailure($collector, $exception);
+            error_log(sprintf(
+                'hyperf-log %s prepare failed: %s request_id=%s',
+                $collector->value,
+                $exception::class,
+                $origin->requestId ?? 'unavailable',
+            ));
         }
-    }
-
-    private function reportFailure(Collector $collector, Throwable $exception): void
-    {
-        error_log(sprintf(
-            'hyperf-log %s write failed: %s request_id=%s',
-            $collector->value,
-            $exception::class,
-            $this->requestContext->id() ?? 'unavailable',
-        ));
-    }
-
-    private function reportDispatchFailure(Collector $collector, ?Throwable $exception = null): void
-    {
-        error_log(sprintf(
-            'hyperf-log %s async dispatch failed: %s; falling back to sync request_id=%s',
-            $collector->value,
-            $exception === null ? 'unknown error' : $exception::class,
-            $this->requestContext->id() ?? 'unavailable',
-        ));
     }
 }

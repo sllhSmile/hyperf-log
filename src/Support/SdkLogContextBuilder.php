@@ -51,17 +51,17 @@ final readonly class SdkLogContextBuilder
             'duration_ms' => round((microtime(true) - $startedAt) * 1000, 2),
             'request' => $request,
         ];
-        if ($response !== null && $this->config->responseEnabled(Collector::Sdk)) {
-            $responseContext = [
-                'status_code' => $response->getStatusCode(),
-                'headers' => $response->getHeaders(),
-            ];
-            $snapshot = $this->snapshotter->snapshot($response->getBody(), 'response.body');
-            if ($snapshot->contents !== null) {
-                $responseContext['body'] = $snapshot->contents;
-            }
-            if ($snapshot->protection !== null) {
-                $protections[] = $snapshot->protection->toArray();
+        if ($response !== null) {
+            $responseContext = ['status_code' => $response->getStatusCode()];
+            if ($this->config->responseEnabled(Collector::Sdk)) {
+                $responseContext['headers'] = $response->getHeaders();
+                $snapshot = $this->snapshotter->snapshot($response->getBody(), 'response.body');
+                if ($snapshot->contents !== null) {
+                    $responseContext['body'] = $snapshot->contents;
+                }
+                if ($snapshot->protection !== null) {
+                    $protections[] = $snapshot->protection->toArray();
+                }
             }
             $context['response'] = $responseContext;
         }

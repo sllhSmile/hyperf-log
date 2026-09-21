@@ -115,6 +115,7 @@ final class CollectorIntegrationTest extends TestCase
                     true,
                     null,
                 ));
+                $logger->drain();
             });
 
             rewind($stream);

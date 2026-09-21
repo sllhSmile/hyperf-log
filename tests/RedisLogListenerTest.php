@@ -30,7 +30,7 @@ final class RedisLogListenerTest extends TestCase
     public function testFailureUsesErrorAndNeverResponse(): void
     {
         $logger = $this->createMock(CollectorLoggerInterface::class);
-        $logger->expects(self::once())->method('info')->with(
+        $logger->expects(self::once())->method('error')->with(
             Collector::Redis,
             self::callback(static fn(array $value): bool =>
                 $value['error']['type'] === RuntimeException::class && ! isset($value['response'])),

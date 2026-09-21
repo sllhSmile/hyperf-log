@@ -13,6 +13,7 @@ use Psr\Http\Message\UploadedFileInterface;
 use Sllhsmile\HyperfLog\Context\RequestContext;
 use Sllhsmile\HyperfLog\Contract\CollectorLoggerInterface;
 use Sllhsmile\HyperfLog\Enum\Collector;
+use Sllhsmile\HyperfLog\Support\HttpLogLevel;
 use Sllhsmile\HyperfLog\Support\LogConfig;
 use Sllhsmile\HyperfLog\Support\PayloadSnapshotter;
 
@@ -48,7 +49,7 @@ final readonly class ApiLogListener implements ListenerInterface
         if ($event->request instanceof ServerRequestInterface) {
             $context['request'] = $this->request($event->request, $protections);
         }
-        if ($event->response instanceof ResponseInterface && $this->config->responseEnabled(Collector::Api)) {
+        if ($event->response instanceof ResponseInterface) {
             $context['response'] = $this->response($event->response, $protections);
         }
         if ($event->exception !== null) {
@@ -66,7 +67,7 @@ final readonly class ApiLogListener implements ListenerInterface
             $context['payload_protection'] = $protections;
         }
 
-        $this->logger->info(Collector::Api, $context);
+        HttpLogLevel::write($this->logger, Collector::Api, $context);
     }
 
     /**
@@ -105,7 +106,11 @@ final readonly class ApiLogListener implements ListenerInterface
      */
     private function response(ResponseInterface $response, array &$protections): array
     {
-        $result = ['status_code' => $response->getStatusCode(), 'headers' => $response->getHeaders()];
+        $result = ['status_code' => $response->getStatusCode()];
+        if (! $this->config->responseEnabled(Collector::Api)) {
+            return $result;
+        }
+        $result['headers'] = $response->getHeaders();
         $this->addSnapshot($result, $response->getBody(), 'response.body', $protections);
 
         return $result;

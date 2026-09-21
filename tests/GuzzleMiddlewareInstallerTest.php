@@ -7,19 +7,25 @@ namespace Sllhsmile\HyperfLog\Tests;
 use GuzzleHttp\Client;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Promise\Create;
+use GuzzleHttp\Promise\Promise;
+use GuzzleHttp\Promise\Utils as PromiseUtils;
 use GuzzleHttp\Psr7\Response;
 use Hyperf\Config\Config;
 use Hyperf\Context\Context;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\RequestInterface;
+use Psr\Http\Message\ResponseInterface;
 use RuntimeException;
 use Sllhsmile\HyperfLog\Context\RequestContext;
 use Sllhsmile\HyperfLog\Contract\CollectorLoggerInterface;
 use Sllhsmile\HyperfLog\Enum\Collector;
 use Sllhsmile\HyperfLog\Support\GuzzleMiddlewareInstaller;
 use Sllhsmile\HyperfLog\Support\LogConfig;
+use Sllhsmile\HyperfLog\Support\LogOrigin;
 use Sllhsmile\HyperfLog\Support\PayloadSnapshotter;
 use Sllhsmile\HyperfLog\Support\SdkLogContextBuilder;
+use Swoole\Coroutine;
+use Swoole\Coroutine\Channel;
 
 final class GuzzleMiddlewareInstallerTest extends TestCase
 {
@@ -40,8 +46,9 @@ final class GuzzleMiddlewareInstallerTest extends TestCase
             Collector::Sdk,
             self::callback(static fn(array $value): bool =>
                 $value['request']['headers']['x-b3-traceid'] === ['trace-id']
-                && ! isset($value['response'])
+                && $value['response'] === ['status_code' => 200]
                 && isset($value['duration_ms'])),
+            self::callback(static fn(LogOrigin $origin): bool => $origin->requestId === 'trace-id'),
         );
         $config = $this->config(true, false);
         $context = new RequestContext();
@@ -64,9 +71,11 @@ final class GuzzleMiddlewareInstallerTest extends TestCase
         $error = new RuntimeException('network failed');
         $stack = HandlerStack::create(static fn() => Create::rejectionFor($error));
         $logger = $this->createMock(CollectorLoggerInterface::class);
-        $logger->expects(self::once())->method('info')->with(
+        $logger->expects(self::once())->method('error')->with(
             Collector::Sdk,
-            self::callback(static fn(array $value): bool => $value['error']['type'] === RuntimeException::class),
+            self::callback(static fn(array $value): bool =>
+                $value['error']['type'] === RuntimeException::class && ! isset($value['response'])),
+            self::isInstanceOf(LogOrigin::class),
         );
         $config = $this->config(true, true);
         $this->installer($config, new RequestContext(), $logger)->install($stack);
@@ -77,6 +86,72 @@ final class GuzzleMiddlewareInstallerTest extends TestCase
         } catch (RuntimeException $caught) {
             self::assertSame($error, $caught);
         }
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('disabledResponseErrorStatuses')]
+    public function testDisabledResponseStillMapsHttpErrorAndOmitsDetails(int $status, string $method): void
+    {
+        $stack = HandlerStack::create(static fn() => Create::promiseFor(new Response($status, ['X-Private' => 'secret'], 'body')));
+        $logger = $this->createMock(CollectorLoggerInterface::class);
+        $logger->expects(self::once())->method($method)->with(
+            Collector::Sdk,
+            self::callback(static fn(array $value): bool => $value['response'] === ['status_code' => $status]),
+            self::isInstanceOf(LogOrigin::class),
+        );
+        $this->installer($this->config(true, false), new RequestContext(), $logger)->install($stack);
+
+        (new Client(['handler' => $stack, 'http_errors' => false]))->get('https://example.test');
+    }
+
+    /** @return array<string, array{int, string}> */
+    public static function disabledResponseErrorStatuses(): array
+    {
+        return ['client error' => [404, 'warning'], 'server error' => [503, 'error']];
+    }
+
+    public function testDisabledResponseDoesNotReadHeadersOrBody(): void
+    {
+        $response = $this->createMock(ResponseInterface::class);
+        $response->expects(self::once())->method('getStatusCode')->willReturn(204);
+        $response->expects(self::never())->method('getHeaders');
+        $response->expects(self::never())->method('getBody');
+        $config = $this->config(true, false);
+
+        $context = (new SdkLogContextBuilder($config, new PayloadSnapshotter($config)))
+            ->complete([], microtime(true), $response);
+
+        self::assertSame(['status_code' => 204], $context['response']);
+    }
+
+    public function testPromiseCompletedInAnotherCoroutineKeepsRequestOrigin(): void
+    {
+        $pending = null;
+        $stack = HandlerStack::create(static function () use (&$pending): Promise {
+            return $pending = new Promise();
+        });
+        $logger = $this->createMock(CollectorLoggerInterface::class);
+        $logger->expects(self::once())->method('info')->with(
+            Collector::Sdk,
+            self::anything(),
+            self::callback(static fn(LogOrigin $origin): bool => $origin->requestId === 'request-trace'),
+        );
+        $context = new RequestContext();
+        $this->installer($this->config(true, false), $context, $logger)->install($stack);
+
+        Coroutine\run(function () use ($stack, $context, &$pending): void {
+            $context->start('request-trace');
+            $promise = (new Client(['handler' => $stack]))->getAsync('https://example.test');
+            self::assertInstanceOf(Promise::class, $pending);
+            $completed = new Channel(1);
+            Coroutine::create(function () use ($context, $pending, $completed): void {
+                $context->start('callback-trace');
+                $pending->resolve(new Response(200));
+                PromiseUtils::queue()->run();
+                $completed->push(true);
+            });
+            self::assertTrue($completed->pop(1));
+            self::assertSame(200, $promise->wait()->getStatusCode());
+        });
     }
 
     public function testDisabledCollectorStillPropagatesTraceWithoutLogging(): void
@@ -119,9 +194,10 @@ final class GuzzleMiddlewareInstallerTest extends TestCase
             throw $error;
         });
         $logger = $this->createMock(CollectorLoggerInterface::class);
-        $logger->expects(self::once())->method('info')->with(
+        $logger->expects(self::once())->method('error')->with(
             Collector::Sdk,
             self::callback(static fn(array $value): bool => $value['error']['message'] === 'synchronous failure'),
+            self::isInstanceOf(LogOrigin::class),
         );
         $this->installer($this->config(true, true), new RequestContext(), $logger)->install($stack);
 
@@ -144,6 +220,7 @@ final class GuzzleMiddlewareInstallerTest extends TestCase
             self::callback(static fn(array $value): bool =>
                 $value['response']['body'] === '{"ok":true}'
                 && $value['response']['status_code'] === 201),
+            self::isInstanceOf(LogOrigin::class),
         );
         $installer = $this->installer($this->config(true, true), new RequestContext(), $logger);
         $installer->install($stack);

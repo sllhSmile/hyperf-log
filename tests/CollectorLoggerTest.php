@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Sllhsmile\HyperfLog\Tests;
 
 use Hyperf\Config\Config;
+use Hyperf\Context\Context;
 use Hyperf\Logger\LoggerFactory;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\PreserveGlobalState;
@@ -17,12 +18,18 @@ use Sllhsmile\HyperfLog\Contract\PayloadProcessorInterface;
 use Sllhsmile\HyperfLog\Enum\Collector;
 use Sllhsmile\HyperfLog\Support\CollectorLogger;
 use Sllhsmile\HyperfLog\Support\LogConfig;
-use Sllhsmile\HyperfLog\Tests\Fixtures\FailedCoroutine;
+use Sllhsmile\HyperfLog\Support\LogMetadata;
+use Sllhsmile\HyperfLog\Support\LogOrigin;
 use Swoole\Coroutine as SwooleCoroutine;
 use Swoole\Coroutine\Channel;
 
 final class CollectorLoggerTest extends TestCase
 {
+    protected function tearDown(): void
+    {
+        Context::destroy(RequestContext::CONTEXT_KEY);
+    }
+
     public function testItProcessesPayloadAndWritesToTheMappedChannel(): void
     {
         $processor = $this->createMock(PayloadProcessorInterface::class);
@@ -30,10 +37,13 @@ final class CollectorLoggerTest extends TestCase
             ->with(Collector::Api, ['request' => ['body' => 'raw']])
             ->willReturn(['request' => ['body' => 'safe']]);
         $psrLogger = $this->createMock(LoggerInterface::class);
-        $psrLogger->expects(self::once())->method('info')->with('http.server', [
-            'request' => ['body' => 'safe'],
-            Collector::LOG_CONTEXT_KEY => Collector::Api,
-        ]);
+        $psrLogger->expects(self::once())->method('info')->with(
+            'http.server',
+            self::callback(static fn(array $context): bool =>
+                $context['request']['body'] === 'safe'
+                && $context[Collector::LOG_METADATA_KEY] instanceof LogMetadata
+                && $context[Collector::LOG_METADATA_KEY]->collector === Collector::Api),
+        );
         $factory = $this->createMock(LoggerFactory::class);
         $factory->expects(self::once())->method('get')->with('apilog', 'custom')->willReturn($psrLogger);
         $config = new LogConfig(new Config(['trace_log' => ['logger_channel' => 'custom']]));
@@ -47,14 +57,38 @@ final class CollectorLoggerTest extends TestCase
         $processor = $this->createMock(PayloadProcessorInterface::class);
         $processor->method('process')->willReturn([]);
         $psrLogger = $this->createMock(LoggerInterface::class);
-        $psrLogger->expects(self::once())->method('info')->with('http.client', [
-            Collector::LOG_CONTEXT_KEY => Collector::Sdk,
-        ]);
+        $psrLogger->expects(self::once())->method('info')->with(
+            'http.client',
+            self::callback(static fn(array $context): bool =>
+                $context[Collector::LOG_METADATA_KEY] instanceof LogMetadata
+                && $context[Collector::LOG_METADATA_KEY]->collector === Collector::Sdk),
+        );
         $factory = $this->createMock(LoggerFactory::class);
         $factory->expects(self::once())->method('get')->with('sdklog', null)->willReturn($psrLogger);
 
         (new CollectorLogger($factory, new LogConfig(new Config([])), new RequestContext(), $processor))
             ->info(Collector::Sdk, []);
+    }
+
+    public function testExplicitOriginOverridesCurrentCoroutineContext(): void
+    {
+        $requestContext = new RequestContext();
+        $requestContext->start('callback-trace');
+        $processor = $this->createMock(PayloadProcessorInterface::class);
+        $processor->method('process')->willReturn([]);
+        $psrLogger = $this->createMock(LoggerInterface::class);
+        $psrLogger->expects(self::once())->method('info')->with(
+            'http.client',
+            self::callback(static fn(array $context): bool =>
+                $context[Collector::LOG_METADATA_KEY] instanceof LogMetadata
+                && $context[Collector::LOG_METADATA_KEY]->requestId === 'request-trace'
+                && $context[Collector::LOG_METADATA_KEY]->coroutineId === 123),
+        );
+        $factory = $this->createMock(LoggerFactory::class);
+        $factory->method('get')->willReturn($psrLogger);
+
+        (new CollectorLogger($factory, new LogConfig(new Config([])), $requestContext, $processor))
+            ->info(Collector::Sdk, [], new LogOrigin('request-trace', 123));
     }
 
     public function testWriteFailureNeverEscapesIntoBusinessCode(): void
@@ -68,7 +102,32 @@ final class CollectorLoggerTest extends TestCase
         (new CollectorLogger($factory, $config, new RequestContext(), $processor))->info(Collector::Redis, []);
     }
 
-    public function testAsyncModeForksAndCopiesRequestContext(): void
+    public function testAllPsrLevelsDelegateToTheMatchingMonologLevel(): void
+    {
+        $processor = $this->createMock(PayloadProcessorInterface::class);
+        $processor->method('process')->willReturn([]);
+        $psrLogger = $this->createMock(LoggerInterface::class);
+        foreach (['emergency', 'alert', 'critical', 'error', 'warning', 'notice', 'info', 'debug'] as $method) {
+            $psrLogger->expects(self::once())->method($method)->with(
+                'http.server',
+                self::callback(static fn(array $context): bool => $context[Collector::LOG_METADATA_KEY]->collector === Collector::Api),
+            );
+        }
+        $factory = $this->createMock(LoggerFactory::class);
+        $factory->method('get')->willReturn($psrLogger);
+        $logger = new CollectorLogger($factory, new LogConfig(new Config(['trace_log' => ['write_mode' => 'sync']])), new RequestContext(), $processor);
+
+        $logger->emergency(Collector::Api, []);
+        $logger->alert(Collector::Api, []);
+        $logger->critical(Collector::Api, []);
+        $logger->error(Collector::Api, []);
+        $logger->warning(Collector::Api, []);
+        $logger->notice(Collector::Api, []);
+        $logger->info(Collector::Api, []);
+        $logger->debug(Collector::Api, []);
+    }
+
+    public function testAsyncModeUsesOneConsumerAndSnapshotsRequestContext(): void
     {
         $requestContext = new RequestContext();
         $processor = $this->createMock(PayloadProcessorInterface::class);
@@ -77,20 +136,24 @@ final class CollectorLoggerTest extends TestCase
         $writerRequestId = null;
         $psrLogger = $this->createMock(LoggerInterface::class);
         $psrLogger->expects(self::once())->method('info')->willReturnCallback(
-            function () use ($requestContext, &$writerCoroutineId, &$writerRequestId): void {
+            function (string $message, array $context) use (&$writerCoroutineId, &$writerRequestId): void {
                 $writerCoroutineId = SwooleCoroutine::getCid();
-                $writerRequestId = $requestContext->id();
+                $metadata = $context[Collector::LOG_METADATA_KEY];
+                $writerRequestId = $metadata instanceof LogMetadata ? $metadata->requestId : null;
             },
         );
         $factory = $this->createMock(LoggerFactory::class);
         $factory->method('get')->willReturn($psrLogger);
-        $logger = new CollectorLogger($factory, new LogConfig(new Config([])), $requestContext, $processor);
+        $logger = new CollectorLogger($factory, new LogConfig(new Config([
+            'trace_log' => ['write_mode' => 'async'],
+        ])), $requestContext, $processor);
         $callerCoroutineId = null;
 
         \Swoole\Coroutine\run(function () use ($requestContext, $logger, &$callerCoroutineId): void {
             $requestContext->start('async-trace');
             $callerCoroutineId = SwooleCoroutine::getCid();
             $logger->info(Collector::Api, []);
+            $logger->drain();
         });
 
         self::assertNotSame($callerCoroutineId, $writerCoroutineId);
@@ -141,7 +204,9 @@ final class CollectorLoggerTest extends TestCase
         );
         $factory = $this->createMock(LoggerFactory::class);
         $factory->method('get')->willReturn($psrLogger);
-        $logger = new CollectorLogger($factory, new LogConfig(new Config([])), new RequestContext(), $processor);
+        $logger = new CollectorLogger($factory, new LogConfig(new Config([
+            'trace_log' => ['write_mode' => 'async'],
+        ])), new RequestContext(), $processor);
         $callerCoroutineId = null;
         set_error_handler(static fn(): bool => true);
 
@@ -149,35 +214,13 @@ final class CollectorLoggerTest extends TestCase
             \Swoole\Coroutine\run(function () use ($logger, &$callerCoroutineId): void {
                 $callerCoroutineId = SwooleCoroutine::getCid();
                 $logger->info(Collector::Api, []);
+                $logger->drain();
             });
         } finally {
             restore_error_handler();
         }
 
         self::assertSame($callerCoroutineId, $writerCoroutineId);
-        self::assertStringContainsString('falling back to sync', (string) file_get_contents($diagnosticFile));
-        unlink($diagnosticFile);
-    }
-
-    #[RunInSeparateProcess]
-    #[PreserveGlobalState(false)]
-    public function testNegativeForkResultFallsBackToSynchronousWrite(): void
-    {
-        require_once __DIR__ . '/Fixtures/FailedCoroutine.php';
-        class_alias(FailedCoroutine::class, \Hyperf\Coroutine\Coroutine::class);
-        $diagnosticFile = tempnam(sys_get_temp_dir(), 'hyperf-log-negative-fork-');
-        self::assertIsString($diagnosticFile);
-        ini_set('error_log', $diagnosticFile);
-        $processor = $this->createMock(PayloadProcessorInterface::class);
-        $processor->method('process')->willReturn([]);
-        $psrLogger = $this->createMock(LoggerInterface::class);
-        $psrLogger->expects(self::once())->method('info');
-        $factory = $this->createMock(LoggerFactory::class);
-        $factory->method('get')->willReturn($psrLogger);
-        $logger = new CollectorLogger($factory, new LogConfig(new Config([])), new RequestContext(), $processor);
-
-        $logger->info(Collector::Api, []);
-
         self::assertStringContainsString('falling back to sync', (string) file_get_contents($diagnosticFile));
         unlink($diagnosticFile);
     }
@@ -214,6 +257,7 @@ final class CollectorLoggerTest extends TestCase
             $logger->info(Collector::Api, []);
             $observedOnReturn = $completed;
             self::assertTrue($finished->pop(1));
+            $logger->drain();
         });
 
         self::assertSame($completedOnReturn, $observedOnReturn);
@@ -235,6 +279,7 @@ final class CollectorLoggerTest extends TestCase
         \Swoole\Coroutine\run(function () use ($logger, &$businessContinued): void {
             $logger->info(Collector::Api, []);
             $businessContinued = true;
+            $logger->drain();
         });
 
         self::assertTrue($businessContinued);
@@ -246,10 +291,8 @@ final class CollectorLoggerTest extends TestCase
         $factory->expects(self::never())->method('get');
         $processor = $this->createMock(PayloadProcessorInterface::class);
         $config = new LogConfig(new Config(['trace_log' => ['write_mode' => null]]));
-        $logger = new CollectorLogger($factory, $config, new RequestContext(), $processor);
-
         $this->expectException(\InvalidArgumentException::class);
-        $logger->info(Collector::Api, []);
+        new CollectorLogger($factory, $config, new RequestContext(), $processor);
     }
 
     public function testConcurrentAsyncWritesKeepTheirOwnTraceSnapshot(): void
@@ -260,20 +303,24 @@ final class CollectorLoggerTest extends TestCase
         $seen = [];
         $psrLogger = $this->createMock(LoggerInterface::class);
         $psrLogger->expects(self::exactly(2))->method('info')->willReturnCallback(
-            static function (string $message, array $context) use ($requestContext, &$seen): void {
+            static function (string $message, array $context) use (&$seen): void {
                 SwooleCoroutine::sleep(0.001);
-                $seen[$context['sequence']] = $requestContext->id();
+                $metadata = $context[Collector::LOG_METADATA_KEY];
+                $seen[$context['sequence']] = $metadata instanceof LogMetadata ? $metadata->requestId : null;
             },
         );
         $factory = $this->createMock(LoggerFactory::class);
         $factory->method('get')->willReturn($psrLogger);
-        $logger = new CollectorLogger($factory, new LogConfig(new Config([])), $requestContext, $processor);
+        $logger = new CollectorLogger($factory, new LogConfig(new Config([
+            'trace_log' => ['write_mode' => 'async'],
+        ])), $requestContext, $processor);
 
         \Swoole\Coroutine\run(static function () use ($requestContext, $logger): void {
             $requestContext->start('first');
             $logger->info(Collector::Api, ['sequence' => 1]);
             $requestContext->start('second');
             $logger->info(Collector::Api, ['sequence' => 2]);
+            $logger->drain();
         });
 
         self::assertSame('first', $seen[1]);
