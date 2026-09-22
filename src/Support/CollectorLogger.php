@@ -28,10 +28,6 @@ final readonly class CollectorLogger implements CollectorLoggerInterface
         private RequestContext $requestContext,
         private PayloadProcessorInterface $payloadProcessor,
     ) {
-        $mode = $config->writeMode();
-        if ($mode === WriteMode::ASYNC) {
-            $config->asyncMaxBufferBytes();
-        }
         $this->dispatcher = new AsyncDispatcher($factory, $config, $requestContext);
     }
 
@@ -43,48 +39,8 @@ final readonly class CollectorLogger implements CollectorLoggerInterface
         $this->dispatcher->drain();
     }
 
-    public function emergency(Collector $collector, array $context, ?LogOrigin $origin = null): void
-    {
-        $this->write(Level::Emergency, $collector, $context, $origin);
-    }
-
-    public function alert(Collector $collector, array $context, ?LogOrigin $origin = null): void
-    {
-        $this->write(Level::Alert, $collector, $context, $origin);
-    }
-
-    public function critical(Collector $collector, array $context, ?LogOrigin $origin = null): void
-    {
-        $this->write(Level::Critical, $collector, $context, $origin);
-    }
-
-    public function error(Collector $collector, array $context, ?LogOrigin $origin = null): void
-    {
-        $this->write(Level::Error, $collector, $context, $origin);
-    }
-
-    public function warning(Collector $collector, array $context, ?LogOrigin $origin = null): void
-    {
-        $this->write(Level::Warning, $collector, $context, $origin);
-    }
-
-    public function notice(Collector $collector, array $context, ?LogOrigin $origin = null): void
-    {
-        $this->write(Level::Notice, $collector, $context, $origin);
-    }
-
-    public function info(Collector $collector, array $context, ?LogOrigin $origin = null): void
-    {
-        $this->write(Level::Info, $collector, $context, $origin);
-    }
-
-    public function debug(Collector $collector, array $context, ?LogOrigin $origin = null): void
-    {
-        $this->write(Level::Debug, $collector, $context, $origin);
-    }
-
     /** @param array<string, mixed> $context */
-    private function write(Level $level, Collector $collector, array $context, ?LogOrigin $origin): void
+    public function log(Level $level, Collector $collector, array $context, ?LogOrigin $origin = null): void
     {
         $datetime = new JsonSerializableDateTimeImmutable(true);
         $origin ??= new LogOrigin($this->requestContext->id(), Coroutine::id());
@@ -100,12 +56,11 @@ final readonly class CollectorLogger implements CollectorLoggerInterface
                 $estimatedBytes,
             ));
         } catch (Throwable $exception) {
-            error_log(sprintf(
-                'hyperf-log %s prepare failed: %s request_id=%s',
-                $collector->value,
-                $exception::class,
-                $origin->requestId ?? 'unavailable',
-            ));
+            InternalDiagnostic::reportException(
+                sprintf('hyperf-log %s prepare failed', $collector->value),
+                $exception,
+                $origin->requestId,
+            );
         }
     }
 }

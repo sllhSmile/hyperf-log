@@ -59,7 +59,7 @@ final readonly class GuzzleMiddlewareInstaller
                     // 在 handler 消费请求流之前完成快照；失败时仍继续真实网络请求。
                     $requestSnapshot = $this->contextBuilder->request($request);
                 } catch (Throwable $exception) {
-                    $this->reportFailure($exception, $requestId);
+                    $this->reportFailure('prepare', $exception, $requestId);
 
                     return Create::promiseFor($handler($request, $options));
                 }
@@ -103,24 +103,19 @@ final readonly class GuzzleMiddlewareInstaller
     ): void {
         try {
             $context = $this->contextBuilder->complete($request, $startedAt, $response, $reason);
-            LogLevelDispatcher::write(
-                $this->logger,
+            $this->logger->log(
                 HttpLogLevel::resolve($context['response']['status_code'] ?? null, isset($context['error'])),
                 Collector::Sdk,
                 $context,
                 $origin,
             );
         } catch (Throwable $exception) {
-            $this->reportFailure($exception, $origin->requestId);
+            $this->reportFailure('write', $exception, $origin->requestId);
         }
     }
 
-    private function reportFailure(Throwable $exception, ?string $requestId): void
+    private function reportFailure(string $stage, Throwable $exception, ?string $requestId): void
     {
-        error_log(sprintf(
-            'hyperf-log sdk write failed: %s request_id=%s',
-            $exception::class,
-            $requestId ?? 'unavailable',
-        ));
+        InternalDiagnostic::reportException(sprintf('hyperf-log sdk %s failed', $stage), $exception, $requestId);
     }
 }

@@ -15,7 +15,6 @@ use Sllhsmile\HyperfLog\Contract\CollectorLoggerInterface;
 use Sllhsmile\HyperfLog\Enum\Collector;
 use Sllhsmile\HyperfLog\Support\HttpLogLevel;
 use Sllhsmile\HyperfLog\Support\LogConfig;
-use Sllhsmile\HyperfLog\Support\LogLevelDispatcher;
 use Sllhsmile\HyperfLog\Support\PayloadSnapshotter;
 
 /**
@@ -74,8 +73,7 @@ final readonly class ApiLogListener implements ListenerInterface
             $context['payload_protection'] = $protections;
         }
 
-        LogLevelDispatcher::write(
-            $this->logger,
+        $this->logger->log(
             HttpLogLevel::resolve($context['response']['status_code'] ?? null, isset($context['error'])),
             Collector::Api,
             $context,

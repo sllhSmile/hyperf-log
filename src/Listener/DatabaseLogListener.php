@@ -6,6 +6,7 @@ namespace Sllhsmile\HyperfLog\Listener;
 
 use Hyperf\Database\Events\QueryExecuted;
 use Hyperf\Event\Contract\ListenerInterface;
+use Monolog\Level;
 use Sllhsmile\HyperfLog\Contract\CollectorLoggerInterface;
 use Sllhsmile\HyperfLog\Enum\Collector;
 use Sllhsmile\HyperfLog\Support\LogConfig;
@@ -53,10 +54,10 @@ final readonly class DatabaseLogListener implements ListenerInterface
             $context['response'] = ['body' => $event->result];
         }
 
-        if ($event->result instanceof Throwable) {
-            $this->logger->error(Collector::Database, $context);
-        } else {
-            $this->logger->info(Collector::Database, $context);
-        }
+        $this->logger->log(
+            $event->result instanceof Throwable ? Level::Error : Level::Info,
+            Collector::Database,
+            $context,
+        );
     }
 }

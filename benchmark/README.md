@@ -11,7 +11,7 @@ composer benchmark -- --count=2000 --concurrency=16 --delay-us=0
 
 脚本使用真实 Hyperf Logger、内容保护、JSON Formatter 和临时文件 StreamHandler。`delay-us` 是 Handler 写入前的人工可让出延迟，默认 1,000 微秒，用于观察异步积压；0 表示不加人工延迟。没有模拟数据库、Redis 服务或网络日志后端，也没有验证物理 fsync。临时日志在测量后删除。
 
-每组输出一行 JSON，包含提交耗时 `submit_ms`、完成耗时 `elapsed_ms`、提交/完成吞吐、PHP 峰值内存、Handler 观察到的峰值协程数、最终行数和缺失行数。内存不等于操作系统 RSS；立即终止没有完整完成耗时/吞吐保证。结果受主机负载、PHP、Swoole、hook 设置和文件系统影响，不设置共享 CI Runner 的绝对性能门槛。
+每组输出一行 JSON，包含提交耗时 `submit_ms`、完成耗时 `elapsed_ms`、提交/完成吞吐、PHP 峰值内存、Handler 观察到的峰值协程数、最终行数、唯一序号数、重复数和缺失数。`wait` 场景要求所有序号恰好写入一次；`immediate` 只记录终止时结果。内存不等于操作系统 RSS；立即终止没有完整完成耗时/吞吐保证。结果受主机负载、PHP、Swoole、hook 设置和文件系统影响，不设置共享 CI Runner 的绝对性能门槛。
 
 ## 历史基线
 

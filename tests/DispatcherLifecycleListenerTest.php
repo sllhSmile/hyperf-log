@@ -10,6 +10,7 @@ use Hyperf\Config\Config;
 use Hyperf\Framework\Event\OnWorkerExit;
 use Hyperf\Logger\LoggerFactory;
 use Hyperf\Server\Event\AllCoroutineServersClosed;
+use Monolog\Level;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\LoggerInterface;
 use Sllhsmile\HyperfLog\Context\RequestContext;
@@ -46,7 +47,7 @@ final class DispatcherLifecycleListenerTest extends TestCase
         $listener = new DispatcherLifecycleListener($logger);
 
         \Swoole\Coroutine\run(function () use ($logger, $listener): void {
-            $logger->info(Collector::Api, []);
+            $logger->log(Level::Info, Collector::Api, []);
             $listener->process(new AfterExecute($this->createMock(Command::class)));
         });
     }

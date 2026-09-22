@@ -6,6 +6,7 @@ namespace Sllhsmile\HyperfLog\Tests;
 
 use Hyperf\Config\Config;
 use Hyperf\Redis\Event\CommandExecuted;
+use Monolog\Level;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 use RuntimeException;
@@ -19,7 +20,8 @@ final class RedisLogListenerTest extends TestCase
     public function testItAlwaysMasksAuthAndOmitsDisabledResponse(): void
     {
         $logger = $this->createMock(CollectorLoggerInterface::class);
-        $logger->expects(self::once())->method('info')->with(
+        $logger->expects(self::once())->method('log')->with(
+            Level::Info,
             Collector::Redis,
             self::callback(static fn(array $value): bool =>
                 $value['request']['command'] === 'AUTH ***' && ! isset($value['response'])),
@@ -30,7 +32,8 @@ final class RedisLogListenerTest extends TestCase
     public function testFailureUsesErrorAndNeverResponse(): void
     {
         $logger = $this->createMock(CollectorLoggerInterface::class);
-        $logger->expects(self::once())->method('error')->with(
+        $logger->expects(self::once())->method('log')->with(
+            Level::Error,
             Collector::Redis,
             self::callback(static fn(array $value): bool =>
                 $value['error']['type'] === RuntimeException::class && ! isset($value['response'])),
@@ -41,7 +44,8 @@ final class RedisLogListenerTest extends TestCase
     public function testSuccessfulResultIsIncludedOnlyWhenEnabled(): void
     {
         $logger = $this->createMock(CollectorLoggerInterface::class);
-        $logger->expects(self::once())->method('info')->with(
+        $logger->expects(self::once())->method('log')->with(
+            Level::Info,
             Collector::Redis,
             self::callback(static fn(array $value): bool =>
                 $value['request']['command'] === 'GET key'
@@ -55,7 +59,7 @@ final class RedisLogListenerTest extends TestCase
     public function testDisabledCollectorAndUnrelatedEventsDoNotLog(): void
     {
         $logger = $this->createMock(CollectorLoggerInterface::class);
-        $logger->expects(self::never())->method('info');
+        $logger->expects(self::never())->method('log');
         $listener = new RedisLogListener(new LogConfig(new Config([])), $logger);
 
         $listener->process(new \stdClass());

@@ -6,6 +6,7 @@ namespace Sllhsmile\HyperfLog\Listener;
 
 use Hyperf\Event\Contract\ListenerInterface;
 use Hyperf\Redis\Event\CommandExecuted;
+use Monolog\Level;
 use Sllhsmile\HyperfLog\Contract\CollectorLoggerInterface;
 use Sllhsmile\HyperfLog\Enum\Collector;
 use Sllhsmile\HyperfLog\Support\LogConfig;
@@ -47,10 +48,10 @@ final readonly class RedisLogListener implements ListenerInterface
             $context['response'] = ['body' => $event->result];
         }
 
-        if ($event->throwable !== null) {
-            $this->logger->error(Collector::Redis, $context);
-        } else {
-            $this->logger->info(Collector::Redis, $context);
-        }
+        $this->logger->log(
+            $event->throwable !== null ? Level::Error : Level::Info,
+            Collector::Redis,
+            $context,
+        );
     }
 }

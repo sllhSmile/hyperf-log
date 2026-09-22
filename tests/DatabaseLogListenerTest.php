@@ -7,6 +7,7 @@ namespace Sllhsmile\HyperfLog\Tests;
 use Hyperf\Config\Config;
 use Hyperf\Database\Connection;
 use Hyperf\Database\Events\QueryExecuted;
+use Monolog\Level;
 use PDO;
 use PHPUnit\Framework\TestCase;
 use Sllhsmile\HyperfLog\Contract\CollectorLoggerInterface;
@@ -30,7 +31,8 @@ final class DatabaseLogListenerTest extends TestCase
     public function testListenerOmitsResponseUnlessExplicitlyEnabled(): void
     {
         $logger = $this->createMock(CollectorLoggerInterface::class);
-        $logger->expects(self::once())->method('info')->with(
+        $logger->expects(self::once())->method('log')->with(
+            Level::Info,
             Collector::Database,
             self::callback(static fn(array $value): bool =>
                 $value['duration_ms'] === 2.5 && ! isset($value['response'])),
@@ -58,7 +60,8 @@ final class DatabaseLogListenerTest extends TestCase
     public function testListenerIncludesExplicitlyEnabledResult(): void
     {
         $logger = $this->createMock(CollectorLoggerInterface::class);
-        $logger->expects(self::once())->method('info')->with(
+        $logger->expects(self::once())->method('log')->with(
+            Level::Info,
             Collector::Database,
             self::callback(static fn(array $value): bool =>
                 $value['request']['sql'] === 'select 1'
@@ -75,7 +78,7 @@ final class DatabaseLogListenerTest extends TestCase
     public function testDisabledCollectorAndUnrelatedEventsDoNotLog(): void
     {
         $logger = $this->createMock(CollectorLoggerInterface::class);
-        $logger->expects(self::never())->method('info');
+        $logger->expects(self::never())->method('log');
         $listener = new DatabaseLogListener(new LogConfig(new Config([])), $logger, new SqlInterpolator());
 
         $listener->process(new \stdClass());

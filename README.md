@@ -13,14 +13,14 @@
 
 | hyperf-log | PHP | Hyperf | Swoole | Guzzle |
 | --- | --- | --- | --- | --- |
-| `>=0.8 <1.0` | `>=8.2` | `^3.2` | 官方 Swoole `>=5.0` | `^7.0` |
+| `>=0.8.1 <1.0` | `>=8.2` | `^3.2` | 官方 Swoole `>=5.0` | `^7.0` |
 
-从 0.7.1 起，Composer 显式要求 `ext-swoole >=5.0`；普通 PHP 和 OpenSwoole 不在运行支持范围。PHP 依赖约束允许 `>=8.2`，CI 配置覆盖 8.2、8.3、8.4 并在每个任务中安装 Swoole，不代表已验证全部 PHP/Swoole 版本组合。CLI 的非协程执行路径也需要安装 Swoole 扩展。
+Composer 显式要求 `ext-swoole >=5.0`；普通 PHP 和 OpenSwoole 不在运行支持范围。PHP 依赖约束允许 `>=8.2`，CI 配置覆盖 8.2、8.3、8.4 并在每个任务中安装 Swoole，不代表已验证全部 PHP/Swoole 版本组合。CLI 的非协程执行路径也需要安装 Swoole 扩展。
 
 ## 安装
 
 ```bash
-composer require sllhsmile/hyperf-log:^0.8
+composer require sllhsmile/hyperf-log:^0.8.1
 php bin/hyperf.php vendor:publish sllhsmile/hyperf-log --id=trace-log-config
 ```
 
@@ -156,17 +156,19 @@ final readonly class CurrentTrace
 
 ## 采集日志写入模式
 
-`trace_log.write_mode` 支持严格值 `async` 和 `sync`（可使用 `WriteMode::ASYNC` 和 `WriteMode::SYNC` 常量）；从 0.8 起省略时为 `sync`，大小写、空白或其他类型均不接受，构造日志服务时抛出 `InvalidArgumentException`。
+`trace_log.write_mode` 支持严格值 `async` 和 `sync`（可使用 `WriteMode::ASYNC` 和 `WriteMode::SYNC` 常量）；省略时默认为 `sync`，大小写、空白或其他类型均不接受，构造日志服务时抛出 `InvalidArgumentException`。
 
 - `sync`：在当前执行单元中完成内容保护和 Handler 写入尝试后返回，是默认可靠基线；可能增加业务延迟。
 - `async`：每个 Worker 惰性创建一个有界队列和一个消费协程，不会为每条日志创建协程。队列按估算字节受 `async.max_buffer_bytes` 限制，默认 8 MiB；满载时短暂等待 1ms，随后同步回退，不静默丢弃。
-- 两种模式都隔离内容处理和 Handler 异常，并输出仅包含异常类型和 request ID 的内部诊断，不改变业务结果。非法配置不属于 Handler 异常，不会静默降级。
+- 两种模式都隔离内容处理和 Handler 异常，并输出单行内部诊断（异常类型、消息、文件名、行号和 request ID）；消息会转义换行并限制为 4096 字节，不输出 stack trace。非法配置不属于 Handler 异常，不会静默降级。
 
 该开关只控制四类采集日志，不改动宿主直接写入的普通业务日志。Hyperf 的 `OnWorkerExit`、`AllCoroutineServersClosed` 和 CLI `AfterExecute` 会触发最多 3 秒的 drain；部署时 `server.settings.max_wait_time` 不应小于 3 秒。正常退出仍是 best-effort，SIGKILL、OOM、进程崩溃和 Handler 自身故障可能丢日志；字节预算也是队列内容估算值，不是 Worker RSS 上限。同步模式同样不承诺物理落盘，审计日志应使用持久队列或外部 Collector。可复现测法及本机基线见 [性能验证](https://github.com/sllhSmile/hyperf-log/blob/main/benchmark/README.md)。
 
 采集日志会根据结果选择级别：HTTP API/SDK 的 4xx 为 `WARNING`，5xx 和异常为 `ERROR`，其他结果为 `INFO`；Database 仅在 `QueryExecuted::result` 为 `Throwable` 时使用 `ERROR`，Redis 异常使用 `ERROR`。API/SDK 即使关闭响应详情，也会按响应状态码判断级别；没有响应且无异常时使用 `INFO`。级别只影响 Monolog 记录及 Handler 阈值，不代表自动写入不同文件；四类采集器仍共用 `logger_channel` 选择的物理 channel。
 
-`CollectorLoggerInterface` 提供 PSR-3 的八个级别方法。第三个可选 `LogOrigin` 参数用于显式传递操作发起时的 request ID 和协程 ID；自定义实现必须保留该参数，未提供时再读取当前协程 Context。
+公开枚举 `Sllhsmile\HyperfLog\Enum\HttpStatusClass` 可通过 `tryFromStatusCode(int): ?self` 将 100–599 状态码归为五类，范围外返回 `null`。
+
+`CollectorLoggerInterface` 统一使用 `log(Monolog\Level $level, Collector $collector, array $context, ?LogOrigin $origin = null)`。`LogOrigin` 是公开的跨协程来源快照；Promise 或其他异步完成场景应传入发起请求时的来源。自定义实现需要直接实现这一方法。
 
 ## 内容保护
 
@@ -186,7 +188,7 @@ final readonly class CurrentTrace
 - 可回绕流读取后恢复位置；Hyperf `SwooleStream` 可安全快照；其他不可回绕流不会被消费。
 - 文本超限时截断，结构化数据或流超限时省略。
 
-生产环境不要把字段脱敏当作全面的敏感数据保障：SQL 会插入原始 bindings，Redis 非 `AUTH` 命令记录完整参数；异常文本、自由文本正文、URL 路径等也不做敏感值语义识别。四类采集器默认关闭，应按数据分级启用，尤其谨慎开启数据库、Redis 及响应结果采集。本版保留这些输出行为，HTTP/SDK 的保护承诺仅针对配置字段名匹配和上述流/JSON 边界。
+生产环境不要把字段脱敏当作全面的敏感数据保障：SQL 会插入原始 bindings，Redis 非 `AUTH` 命令记录完整参数；异常文本、自由文本正文、URL 路径等也不做敏感值语义识别。采集链路自身失败时，内部诊断也会输出异常消息（最多 4096 字节），因此异常消息不应包含凭据。四类采集器默认关闭，应按数据分级启用，尤其谨慎开启数据库、Redis 及响应结果采集。HTTP/SDK 的保护承诺仅针对配置字段名匹配和上述流/JSON 边界。
 
 保护动作统一写入 `payload_protection`：
 
@@ -205,27 +207,6 @@ final readonly class CurrentTrace
 Guzzle 客户端会自动透传当前 request ID，并在启用 SDK 采集器时记录调用日志。本包不设置或改写 `timeout`、`connect_timeout` 及 `swoole` 选项；连接和请求超时应由宿主应用或单次请求自行管理。数据库日志只依赖 Hyperf 的 `QueryExecuted` 事件，不对数据库连接方法增加 AOP；在事件派发前直接抛出的查询异常不会生成 `database.query` 日志。
 
 自动安装仅针对 `HandlerStack`；自定义裸 handler 不会被替换。Redis 采集依赖 Hyperf Redis 的 `CommandExecuted` 事件，宿主须启用 Redis 事件（通常为 `REDIS_EVENT_ENABLE=true`），只打开本包开关不足以产生 Redis 日志。
-
-## 从 0.8.0 升级（0.8.1 开发中）
-
-`CollectorLoggerInterface` 的八个方法及 `?LogOrigin` 参数不变，日志 JSON 结构也不变。内部 `LogMetadata` 改为组合来源快照：直接读取此类型的扩展需要从 `$metadata->requestId` / `$metadata->coroutineId` 改为 `$metadata->origin->requestId` / `$metadata->origin->coroutineId`。
-
-新增公开类型 `Sllhsmile\HyperfLog\Support\HttpStatusClass`，`tryFromStatusCode(int): ?self` 将 100–599 归为五类，范围外返回 `null`。HTTP 日志判级按类别决定：4xx 为 WARNING、5xx 为 ERROR、其他为 INFO；异常始终优先记为 ERROR。缺失、非整数或范围外的状态码按 INFO 处理，不会中断业务请求。
-
-## 从 0.7.1 升级
-
-0.8 保持 Schema 1，但默认写入模式由 `async` 改为 `sync`，并移除每日志子协程。需要异步写入时显式设置 `write_mode=async`，可通过 `async.max_buffer_bytes` 调整每 Worker 的队列预算。`CollectorLoggerInterface` 新增七个级别方法及可选 `LogOrigin` 参数；自定义实现必须补齐八级接口并保持完整签名。
-
-## 从 0.6 升级
-
-0.7 是破坏性版本：
-
-- `RequestContext` 移至 `Sllhsmile\HyperfLog\Context`，`TraceContextData` 更名为 `TraceContext`。
-- `CustomizeJsonFormatter` 更名为 `StructuredJsonFormatter`。
-- 采集器开关与响应配置移至 `trace_log.collectors`；`trace_log.logger_channel` 统一选择已有的 Hyperf Logger channel。
-- 移除可配置的 Context key 和内部 Guzzle 开始时间 Header。
-- 日志升级为 `schema_version: 1`，使用固定北京时间的微秒时间、`type`、`error` 和 `payload_protection`。
-- 扩展 `PayloadProcessorInterface` 的实现需将 `process(string, array)` 改为 `process(Collector, array)`。
 
 ## 开发验证
 

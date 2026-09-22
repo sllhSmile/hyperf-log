@@ -6,7 +6,7 @@ namespace Sllhsmile\HyperfLog\Tests;
 
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
-use Sllhsmile\HyperfLog\Support\HttpStatusClass;
+use Sllhsmile\HyperfLog\Enum\HttpStatusClass;
 
 final class HttpStatusClassTest extends TestCase
 {

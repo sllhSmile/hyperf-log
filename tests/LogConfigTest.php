@@ -69,10 +69,8 @@ final class LogConfigTest extends TestCase
 
     public function testInvalidLoggerChannelFailsFast(): void
     {
-        $config = new LogConfig(new Config(['trace_log' => ['logger_channel' => false]]));
-
         $this->expectException(\InvalidArgumentException::class);
-        $config->loggerChannel();
+        new LogConfig(new Config(['trace_log' => ['logger_channel' => false]]));
     }
 
     #[DataProvider('invalidRequestIdHeaders')]
@@ -92,9 +90,36 @@ final class LogConfigTest extends TestCase
 
     public function testInvalidPayloadConfigurationFailsFast(): void
     {
-        $config = new LogConfig(new Config(['trace_log' => ['payload' => ['max_bytes' => 0]]]));
         $this->expectException(\InvalidArgumentException::class);
-        $config->payloadMaxBytes();
+        new LogConfig(new Config(['trace_log' => ['payload' => ['max_bytes' => 0]]]));
+    }
+
+    /** @param array<string, mixed> $values */
+    #[DataProvider('invalidConstructionConfiguration')]
+    public function testAllConfigurationIsValidatedDuringConstruction(array $values, string $message): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage($message);
+
+        new LogConfig(new Config($values));
+    }
+
+    /** @return iterable<string, array{array<string, mixed>, string}> */
+    public static function invalidConstructionConfiguration(): iterable
+    {
+        yield 'service' => [['app_name' => []], 'app_name'];
+        yield 'sensitive fields container' => [
+            ['trace_log' => ['payload' => ['sensitive_fields' => 'password']]],
+            'trace_log.payload.sensitive_fields',
+        ];
+        yield 'sensitive field entry' => [
+            ['trace_log' => ['payload' => ['sensitive_fields' => ['password', '']]]],
+            'trace_log.payload.sensitive_fields',
+        ];
+        yield 'redaction value' => [
+            ['trace_log' => ['payload' => ['redaction_value' => false]]],
+            'trace_log.payload.redaction_value',
+        ];
     }
 
     public function testWriteModeCanSelectSynchronousWrites(): void
@@ -120,11 +145,9 @@ final class LogConfigTest extends TestCase
     #[DataProvider('invalidAsyncBufferBudgets')]
     public function testInvalidAsyncBufferBudgetFailsFast(mixed $bytes): void
     {
-        $config = new LogConfig(new Config(['trace_log' => ['async' => ['max_buffer_bytes' => $bytes]]]));
-
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessage('trace_log.async.max_buffer_bytes');
-        $config->asyncMaxBufferBytes();
+        new LogConfig(new Config(['trace_log' => ['async' => ['max_buffer_bytes' => $bytes]]]));
     }
 
     /** @return list<array{mixed}> */
@@ -136,11 +159,9 @@ final class LogConfigTest extends TestCase
     #[DataProvider('invalidWriteModes')]
     public function testInvalidWriteModeFailsFast(mixed $mode): void
     {
-        $config = new LogConfig(new Config(['trace_log' => ['write_mode' => $mode]]));
-
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessage('trace_log.write_mode');
-        $config->writeMode();
+        new LogConfig(new Config(['trace_log' => ['write_mode' => $mode]]));
     }
 
 }

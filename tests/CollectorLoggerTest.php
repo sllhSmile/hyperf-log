@@ -7,6 +7,7 @@ namespace Sllhsmile\HyperfLog\Tests;
 use Hyperf\Config\Config;
 use Hyperf\Context\Context;
 use Hyperf\Logger\LoggerFactory;
+use Monolog\Level;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\PreserveGlobalState;
 use PHPUnit\Framework\Attributes\RunInSeparateProcess;
@@ -49,7 +50,7 @@ final class CollectorLoggerTest extends TestCase
         $config = new LogConfig(new Config(['trace_log' => ['logger_channel' => 'custom']]));
 
         (new CollectorLogger($factory, $config, new RequestContext(), $processor))
-            ->info(Collector::Api, ['request' => ['body' => 'raw']]);
+            ->log(Level::Info, Collector::Api, ['request' => ['body' => 'raw']]);
     }
 
     public function testItUsesHyperfDefaultChannelWhenLoggerChannelIsNull(): void
@@ -67,7 +68,7 @@ final class CollectorLoggerTest extends TestCase
         $factory->expects(self::once())->method('get')->with('sdklog', null)->willReturn($psrLogger);
 
         (new CollectorLogger($factory, new LogConfig(new Config([])), new RequestContext(), $processor))
-            ->info(Collector::Sdk, []);
+            ->log(Level::Info, Collector::Sdk, []);
     }
 
     public function testExplicitOriginOverridesCurrentCoroutineContext(): void
@@ -88,7 +89,7 @@ final class CollectorLoggerTest extends TestCase
         $factory->method('get')->willReturn($psrLogger);
 
         (new CollectorLogger($factory, new LogConfig(new Config([])), $requestContext, $processor))
-            ->info(Collector::Sdk, [], new LogOrigin('request-trace', 123));
+            ->log(Level::Info, Collector::Sdk, [], new LogOrigin('request-trace', 123));
     }
 
     public function testWriteFailureNeverEscapesIntoBusinessCode(): void
@@ -99,7 +100,7 @@ final class CollectorLoggerTest extends TestCase
         $factory->expects(self::never())->method('get');
         $config = new LogConfig(new Config([]));
 
-        (new CollectorLogger($factory, $config, new RequestContext(), $processor))->info(Collector::Redis, []);
+        (new CollectorLogger($factory, $config, new RequestContext(), $processor))->log(Level::Info, Collector::Redis, []);
     }
 
     public function testAllPsrLevelsDelegateToTheMatchingMonologLevel(): void
@@ -107,7 +108,8 @@ final class CollectorLoggerTest extends TestCase
         $processor = $this->createMock(PayloadProcessorInterface::class);
         $processor->method('process')->willReturn([]);
         $psrLogger = $this->createMock(LoggerInterface::class);
-        foreach (['emergency', 'alert', 'critical', 'error', 'warning', 'notice', 'info', 'debug'] as $method) {
+        foreach (Level::cases() as $level) {
+            $method = $level->toPsrLogLevel();
             $psrLogger->expects(self::once())->method($method)->with(
                 'http.server',
                 self::callback(static fn(array $context): bool => $context[Collector::LOG_METADATA_KEY]->collector === Collector::Api),
@@ -117,14 +119,9 @@ final class CollectorLoggerTest extends TestCase
         $factory->method('get')->willReturn($psrLogger);
         $logger = new CollectorLogger($factory, new LogConfig(new Config(['trace_log' => ['write_mode' => 'sync']])), new RequestContext(), $processor);
 
-        $logger->emergency(Collector::Api, []);
-        $logger->alert(Collector::Api, []);
-        $logger->critical(Collector::Api, []);
-        $logger->error(Collector::Api, []);
-        $logger->warning(Collector::Api, []);
-        $logger->notice(Collector::Api, []);
-        $logger->info(Collector::Api, []);
-        $logger->debug(Collector::Api, []);
+        foreach (Level::cases() as $level) {
+            $logger->log($level, Collector::Api, []);
+        }
     }
 
     public function testAsyncModeUsesOneConsumerAndSnapshotsRequestContext(): void
@@ -152,7 +149,7 @@ final class CollectorLoggerTest extends TestCase
         \Swoole\Coroutine\run(function () use ($requestContext, $logger, &$callerCoroutineId): void {
             $requestContext->start('async-trace');
             $callerCoroutineId = SwooleCoroutine::getCid();
-            $logger->info(Collector::Api, []);
+            $logger->log(Level::Info, Collector::Api, []);
             $logger->drain();
         });
 
@@ -179,7 +176,7 @@ final class CollectorLoggerTest extends TestCase
 
         \Swoole\Coroutine\run(function () use ($logger, &$callerCoroutineId): void {
             $callerCoroutineId = SwooleCoroutine::getCid();
-            $logger->info(Collector::Api, []);
+            $logger->log(Level::Info, Collector::Api, []);
         });
 
         self::assertSame($callerCoroutineId, $writerCoroutineId);
@@ -213,7 +210,7 @@ final class CollectorLoggerTest extends TestCase
         try {
             \Swoole\Coroutine\run(function () use ($logger, &$callerCoroutineId): void {
                 $callerCoroutineId = SwooleCoroutine::getCid();
-                $logger->info(Collector::Api, []);
+                $logger->log(Level::Info, Collector::Api, []);
                 $logger->drain();
             });
         } finally {
@@ -254,7 +251,7 @@ final class CollectorLoggerTest extends TestCase
         $observedOnReturn = null;
 
         \Swoole\Coroutine\run(function () use ($logger, &$completed, &$observedOnReturn, $finished): void {
-            $logger->info(Collector::Api, []);
+            $logger->log(Level::Info, Collector::Api, []);
             $observedOnReturn = $completed;
             self::assertTrue($finished->pop(1));
             $logger->drain();
@@ -277,7 +274,7 @@ final class CollectorLoggerTest extends TestCase
         $businessContinued = false;
 
         \Swoole\Coroutine\run(function () use ($logger, &$businessContinued): void {
-            $logger->info(Collector::Api, []);
+            $logger->log(Level::Info, Collector::Api, []);
             $businessContinued = true;
             $logger->drain();
         });
@@ -289,10 +286,8 @@ final class CollectorLoggerTest extends TestCase
     {
         $factory = $this->createMock(LoggerFactory::class);
         $factory->expects(self::never())->method('get');
-        $processor = $this->createMock(PayloadProcessorInterface::class);
-        $config = new LogConfig(new Config(['trace_log' => ['write_mode' => null]]));
         $this->expectException(\InvalidArgumentException::class);
-        new CollectorLogger($factory, $config, new RequestContext(), $processor);
+        new LogConfig(new Config(['trace_log' => ['write_mode' => null]]));
     }
 
     public function testConcurrentAsyncWritesKeepTheirOwnTraceSnapshot(): void
@@ -317,9 +312,9 @@ final class CollectorLoggerTest extends TestCase
 
         \Swoole\Coroutine\run(static function () use ($requestContext, $logger): void {
             $requestContext->start('first');
-            $logger->info(Collector::Api, ['sequence' => 1]);
+            $logger->log(Level::Info, Collector::Api, ['sequence' => 1]);
             $requestContext->start('second');
-            $logger->info(Collector::Api, ['sequence' => 2]);
+            $logger->log(Level::Info, Collector::Api, ['sequence' => 2]);
             $logger->drain();
         });
 

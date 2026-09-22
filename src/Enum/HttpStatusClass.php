@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Sllhsmile\HyperfLog\Support;
+namespace Sllhsmile\HyperfLog\Enum;
 
 /** 标准 HTTP 状态码的五个百位类别。 */
 enum HttpStatusClass: int

@@ -41,7 +41,7 @@ final class GuzzleLogAspectTest extends TestCase
         $context->start('aspect-trace');
         $config = new LogConfig(new Config([]));
         $logger = $this->createMock(CollectorLoggerInterface::class);
-        $logger->expects(self::never())->method('info');
+        $logger->expects(self::never())->method('log');
         $installer = new GuzzleMiddlewareInstaller(
             $config,
             $context,

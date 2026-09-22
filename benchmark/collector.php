@@ -6,6 +6,7 @@ use Hyperf\Config\Config;
 use Hyperf\Logger\Logger;
 use Hyperf\Logger\LoggerFactory;
 use Monolog\Handler\StreamHandler;
+use Monolog\Level;
 use Monolog\LogRecord;
 use Psr\Log\LoggerInterface;
 use Sllhsmile\HyperfLog\Context\RequestContext;
@@ -89,9 +90,20 @@ if (! isset($options['worker'])) {
                 }
                 $result['written_lines'] = count($lines);
                 $result['missing_lines'] = $count - count($lines);
+                $sequences = [];
+                foreach ($lines as $logLine) {
+                    $record = json_decode($logLine, true, 512, JSON_THROW_ON_ERROR);
+                    if (is_array($record) && is_int($record['benchmark_sequence'] ?? null)) {
+                        $sequences[] = $record['benchmark_sequence'];
+                    }
+                }
+                $uniqueSequences = array_unique($sequences);
+                $result['unique_lines'] = count($uniqueSequences);
+                $result['duplicate_lines'] = count($sequences) - count($uniqueSequences);
                 echo json_encode($result, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES) . PHP_EOL;
-                if ($exitMode === 'wait' && count($lines) !== $count) {
-                    throw new RuntimeException('Normal completion lost benchmark logs.');
+                if ($exitMode === 'wait'
+                    && (count($lines) !== $count || count($uniqueSequences) !== $count)) {
+                    throw new RuntimeException('Normal completion lost or duplicated benchmark logs.');
                 }
             } finally {
                 if (is_resource($process)) {
@@ -179,7 +191,8 @@ $result = [];
         $id = Coroutine::create(static function () use ($logger, $context, $worker, $concurrency, $count, $producersFinished): void {
             $context->start('benchmark-' . $worker);
             for ($index = $worker; $index < $count; $index += $concurrency) {
-                $logger->info(Collector::Api, [
+                $logger->log(Level::Info, Collector::Api, [
+                    'benchmark_sequence' => $index,
                     'request' => [
                         'method' => 'POST', 'url' => '/benchmark',
                         'headers' => ['content-type' => ['application/json']],

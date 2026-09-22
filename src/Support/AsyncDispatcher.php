@@ -26,13 +26,12 @@ final class AsyncDispatcher
     private const ENQUEUE_WAIT_SECONDS = 0.001;
     private const DRAIN_SECONDS = 3.0;
 
-    /** @var Channel<LogEntry|object>|null */
+    /** @var Channel<LogEntry>|null */
     private ?Channel $queue = null;
     /** @var Channel<bool>|null */
     private ?Channel $completion = null;
     /** @var Channel<bool>|null */
     private ?Channel $writerGate = null;
-    private ?object $stopMarker = null;
     private int $reservedBytes = 0;
     private int $queuedEntries = 0;
     private int $pending = 0;
@@ -54,11 +53,6 @@ final class AsyncDispatcher
         private readonly LogConfig $config,
         private readonly RequestContext $requestContext,
     ) {}
-
-    public function write(LogEntry $entry): void
-    {
-        $this->writeSerialized($entry);
-    }
 
     /** 按 write_mode 选择直接写入或提交异步队列。 */
     public function submit(LogEntry $entry): void
@@ -124,8 +118,6 @@ final class AsyncDispatcher
         $this->completion = new Channel(1);
         $this->writerGate = new Channel(1);
         $this->writerGate->push(true);
-        $this->stopMarker = new \stdClass();
-
         $this->startConsumer();
     }
 
@@ -158,14 +150,15 @@ final class AsyncDispatcher
         if (! $this->accepting || $this->queue === null) {
             return false;
         }
-        if ($this->reservedBytes + $entry->estimatedBytes > $this->config->asyncMaxBufferBytes()) {
+        if ($this->reservedBytes + $entry->estimatedBytes > $this->config->asyncMaxBufferBytes()
+            || $this->queue->isFull()) {
             return false;
         }
 
-        // 预算预留与非阻塞 push 之间不会让出协程，可作为同一临界区更新计数。
+        // 满载检查、预算预留与 push 之间不会让出协程，可作为同一临界区更新计数。
         $this->reservedBytes += $entry->estimatedBytes;
         ++$this->queuedEntries;
-        if ($this->queue->push($entry, 0)) {
+        if ($this->queue->push($entry)) {
             return true;
         }
         --$this->queuedEntries;
@@ -187,17 +180,6 @@ final class AsyncDispatcher
                 if ($value === false) {
                     return;
                 }
-                if ($value === $this->stopMarker) {
-                    if ($this->draining && $this->pending === 0) {
-                        $this->completeDrain();
-                        return;
-                    }
-                    continue;
-                }
-                if (! $value instanceof LogEntry) {
-                    continue;
-                }
-
                 --$this->queuedEntries;
                 $this->reservedBytes -= $value->estimatedBytes;
                 ++$this->inflight;
@@ -222,9 +204,6 @@ final class AsyncDispatcher
         $this->draining = true;
         $this->accepting = false;
         $this->startConsumer();
-        if ($this->queue !== null && $this->stopMarker !== null) {
-            $this->queue->push($this->stopMarker, 0);
-        }
         if ($this->pending === 0) {
             $this->completeDrain();
             return;
@@ -253,7 +232,8 @@ final class AsyncDispatcher
         if ($this->queue === null) {
             return;
         }
-        while (($value = $this->queue->pop(0)) !== false) {
+        while (! $this->queue->isEmpty()) {
+            $value = $this->queue->pop();
             if ($value instanceof LogEntry) {
                 --$this->queuedEntries;
                 $this->reservedBytes -= $value->estimatedBytes;
@@ -276,7 +256,7 @@ final class AsyncDispatcher
             return;
         }
         $this->completed = true;
-        $this->completion?->push(true, 0);
+        $this->completion?->push(true);
         $this->queue?->close();
         $stats = $this->stats();
         $this->report(sprintf(
@@ -346,12 +326,11 @@ final class AsyncDispatcher
             }
         } catch (Throwable $exception) {
             ++$this->failures;
-            $this->report(sprintf(
-                'hyperf-log %s write failed: %s request_id=%s',
-                $entry->metadata->collector->value,
-                $exception::class,
-                $entry->metadata->origin->requestId ?? 'unavailable',
-            ));
+            InternalDiagnostic::reportException(
+                sprintf('hyperf-log %s write failed', $entry->metadata->collector->value),
+                $exception,
+                $entry->metadata->origin->requestId,
+            );
         }
     }
 

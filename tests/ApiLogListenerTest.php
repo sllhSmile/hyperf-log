@@ -11,6 +11,7 @@ use GuzzleHttp\Psr7\Utils;
 use Hyperf\Config\Config;
 use Hyperf\Context\Context;
 use Hyperf\HttpServer\Event\RequestHandled;
+use Monolog\Level;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\StreamInterface;
@@ -39,7 +40,8 @@ final class ApiLogListenerTest extends TestCase
             ->withBody($requestBody);
         $response = (new Response(201, ['Content-Type' => 'application/json']))->withBody($responseBody);
         $logger = $this->createMock(CollectorLoggerInterface::class);
-        $logger->expects(self::once())->method('info')->with(
+        $logger->expects(self::once())->method('log')->with(
+            Level::Info,
             Collector::Api,
             self::callback(static fn(array $value): bool =>
                 $value['request']['body'] === '{"password":"secret"}'
@@ -59,7 +61,8 @@ final class ApiLogListenerTest extends TestCase
         $response->expects(self::never())->method('getHeaders');
         $response->expects(self::never())->method('getBody');
         $logger = $this->createMock(CollectorLoggerInterface::class);
-        $logger->expects(self::once())->method('info')->with(
+        $logger->expects(self::once())->method('log')->with(
+            Level::Info,
             Collector::Api,
             self::callback(static fn(array $value): bool => $value['response'] === ['status_code' => 200]),
         );
@@ -72,7 +75,8 @@ final class ApiLogListenerTest extends TestCase
         $inner->seek(3);
         $request = (new ServerRequest('POST', '/'))->withBody(new NoSeekStream($inner));
         $logger = $this->createMock(CollectorLoggerInterface::class);
-        $logger->expects(self::once())->method('info')->with(
+        $logger->expects(self::once())->method('log')->with(
+            Level::Info,
             Collector::Api,
             self::callback(static fn(array $value): bool =>
                 ! isset($value['request']['body'])
@@ -87,7 +91,8 @@ final class ApiLogListenerTest extends TestCase
     {
         (new RequestContext())->start('api-trace');
         $logger = $this->createMock(CollectorLoggerInterface::class);
-        $logger->expects(self::once())->method('error')->with(
+        $logger->expects(self::once())->method('log')->with(
+            Level::Error,
             Collector::Api,
             self::callback(static fn(array $value): bool =>
                 $value['error']['type'] === RuntimeException::class
@@ -105,7 +110,7 @@ final class ApiLogListenerTest extends TestCase
     public function testClientErrorUsesWarningLevel(): void
     {
         $logger = $this->createMock(CollectorLoggerInterface::class);
-        $logger->expects(self::once())->method('warning')->with(Collector::Api, self::anything());
+        $logger->expects(self::once())->method('log')->with(Level::Warning, Collector::Api, self::anything());
 
         $this->listener($logger)->process(new RequestHandled(
             new ServerRequest('GET', '/'),
@@ -120,7 +125,8 @@ final class ApiLogListenerTest extends TestCase
         $response->expects(self::never())->method('getHeaders');
         $response->expects(self::never())->method('getBody');
         $logger = $this->createMock(CollectorLoggerInterface::class);
-        $logger->expects(self::once())->method('error')->with(
+        $logger->expects(self::once())->method('log')->with(
+            Level::Error,
             Collector::Api,
             self::callback(static fn(array $value): bool => $value['response'] === ['status_code' => 503]),
         );
@@ -131,7 +137,8 @@ final class ApiLogListenerTest extends TestCase
     public function testResponseDisabledStillMapsClientErrorToWarning(): void
     {
         $logger = $this->createMock(CollectorLoggerInterface::class);
-        $logger->expects(self::once())->method('warning')->with(
+        $logger->expects(self::once())->method('log')->with(
+            Level::Warning,
             Collector::Api,
             self::callback(static fn(array $value): bool => $value['response'] === ['status_code' => 404]),
         );
@@ -145,7 +152,7 @@ final class ApiLogListenerTest extends TestCase
     public function testDisabledCollectorAndUnrelatedEventsDoNotLog(): void
     {
         $logger = $this->createMock(CollectorLoggerInterface::class);
-        $logger->expects(self::never())->method('info');
+        $logger->expects(self::never())->method('log');
         $config = new LogConfig(new Config([]));
         $listener = new ApiLogListener($config, $logger, new RequestContext(), new PayloadSnapshotter($config));
 

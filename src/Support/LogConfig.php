@@ -10,12 +10,20 @@ use Sllhsmile\HyperfLog\Enum\Collector;
 /**
  * trace_log 配置的类型化读取边界。
  *
- * 采集器默认全部关闭；API 响应默认开启，其余响应默认关闭。布尔开关与 Header 名称在
- * 构造时校验，其余配置在首次读取时严格校验；非法类型会抛出异常，不做宽松类型转换。
+ * 采集器默认全部关闭；API 响应默认开启，其余响应默认关闭。所有已知配置都在构造时
+ * 严格校验；非法类型会抛出异常，不做宽松类型转换。
  */
 final readonly class LogConfig
 {
     public const DEFAULT_ASYNC_MAX_BUFFER_BYTES = 8 * 1024 * 1024;
+    public const DEFAULT_COLLECTOR_ENABLED = false;
+    public const DEFAULT_LOGGER_CHANNEL = null;
+    public const DEFAULT_PAYLOAD_MAX_BYTES = 64 * 1024;
+    public const DEFAULT_REDACTION_VALUE = '****';
+    public const DEFAULT_REQUEST_ID_HEADER = 'x-b3-traceid';
+    public const DEFAULT_RESPONSE_ENABLED = false;
+    public const DEFAULT_WRITE_MODE = WriteMode::SYNC;
+    public const DEFAULT_API_RESPONSE_ENABLED = true;
 
     private const WRITE_MODES = [WriteMode::ASYNC, WriteMode::SYNC];
 
@@ -31,12 +39,19 @@ final readonly class LogConfig
             $this->enabled($collector);
             $this->responseEnabled($collector);
         }
+        $this->loggerChannel();
+        $this->writeMode();
+        $this->asyncMaxBufferBytes();
         $this->requestIdHeader();
+        $this->service();
+        $this->payloadSensitiveFields();
+        $this->payloadRedactionValue();
+        $this->payloadMaxBytes();
     }
 
     public function enabled(Collector $collector): bool
     {
-        return $this->collectorBoolean($collector, 'enabled', false);
+        return $this->collectorBoolean($collector, 'enabled', self::DEFAULT_COLLECTOR_ENABLED);
     }
 
     public function anyEnabled(): bool
@@ -52,7 +67,7 @@ final readonly class LogConfig
 
     public function loggerChannel(): ?string
     {
-        $channel = $this->config->get('trace_log.logger_channel');
+        $channel = $this->config->get('trace_log.logger_channel', self::DEFAULT_LOGGER_CHANNEL);
         if ($channel === null) {
             return null;
         }
@@ -65,7 +80,7 @@ final readonly class LogConfig
 
     public function writeMode(): string
     {
-        $mode = $this->config->get('trace_log.write_mode', WriteMode::SYNC);
+        $mode = $this->config->get('trace_log.write_mode', self::DEFAULT_WRITE_MODE);
         if (! is_string($mode) || ! in_array($mode, self::WRITE_MODES, true)) {
             throw new \InvalidArgumentException('trace_log.write_mode must be either "async" or "sync".');
         }
@@ -85,12 +100,16 @@ final readonly class LogConfig
 
     public function responseEnabled(Collector $collector): bool
     {
-        return $this->collectorBoolean($collector, 'response_enabled', $collector === Collector::Api);
+        return $this->collectorBoolean(
+            $collector,
+            'response_enabled',
+            $collector === Collector::Api ? self::DEFAULT_API_RESPONSE_ENABLED : self::DEFAULT_RESPONSE_ENABLED,
+        );
     }
 
     public function requestIdHeader(): string
     {
-        $header = $this->config->get('trace_log.request_id_header', 'x-b3-traceid');
+        $header = $this->config->get('trace_log.request_id_header', self::DEFAULT_REQUEST_ID_HEADER);
         if (! is_string($header) || preg_match('/^[!#$%&\'*+\-.^_`|~0-9A-Za-z]+$/D', $header) !== 1) {
             throw new \InvalidArgumentException('trace_log.request_id_header must be a valid non-empty HTTP header name.');
         }
@@ -101,7 +120,12 @@ final readonly class LogConfig
 
     public function service(): string
     {
-        return (string) $this->config->get('app_name', $this->config->get('app_env', ''));
+        $service = $this->config->get('app_name', $this->config->get('app_env', ''));
+        if (! is_string($service)) {
+            throw new \InvalidArgumentException('app_name must be a string.');
+        }
+
+        return $service;
     }
 
     /** @return list<string> 规范化为小写并去重的敏感字段名 */
@@ -125,7 +149,7 @@ final readonly class LogConfig
 
     public function payloadRedactionValue(): string
     {
-        $replacement = $this->config->get('trace_log.payload.redaction_value', '****');
+        $replacement = $this->config->get('trace_log.payload.redaction_value', self::DEFAULT_REDACTION_VALUE);
         if (! is_string($replacement)) {
             throw new \InvalidArgumentException('trace_log.payload.redaction_value must be a string.');
         }
@@ -135,7 +159,7 @@ final readonly class LogConfig
 
     public function payloadMaxBytes(): ?int
     {
-        $maxBytes = $this->config->get('trace_log.payload.max_bytes', 64 * 1024);
+        $maxBytes = $this->config->get('trace_log.payload.max_bytes', self::DEFAULT_PAYLOAD_MAX_BYTES);
         if ($maxBytes === null) {
             return null;
         }

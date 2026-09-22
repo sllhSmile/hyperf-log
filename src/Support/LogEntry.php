@@ -12,6 +12,8 @@ use Monolog\Level;
  *
  * datetime 与 origin 均在提交方捕获，异步消费时不得改用消费协程的时间或 Context。
  * estimatedBytes 只用于队列预算，并非 PHP 对象的精确内存占用。
+ *
+ * @internal
  */
 final readonly class LogEntry
 {

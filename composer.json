@@ -37,6 +37,7 @@
         "hyperf/http-server": "^3.2",
         "hyperf/logger": "^3.2",
         "hyperf/redis": "^3.2",
+        "monolog/monolog": "^3.1",
         "ramsey/uuid": "^4.7"
     },
     "autoload": {

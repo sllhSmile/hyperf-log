@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Sllhsmile\HyperfLog\Contract;
 
+use Monolog\Level;
 use Sllhsmile\HyperfLog\Enum\Collector;
 use Sllhsmile\HyperfLog\Support\LogOrigin;
 
@@ -19,26 +20,5 @@ interface CollectorLoggerInterface
      * @param array<string, mixed> $context 已完成请求期资源快照的结构化上下文
      * @param null|LogOrigin $origin 操作发起时的链路快照；异步完成场景不得重新读取当前 Context
      */
-    public function emergency(Collector $collector, array $context, ?LogOrigin $origin = null): void;
-
-    /** @param array<string, mixed> $context */
-    public function alert(Collector $collector, array $context, ?LogOrigin $origin = null): void;
-
-    /** @param array<string, mixed> $context */
-    public function critical(Collector $collector, array $context, ?LogOrigin $origin = null): void;
-
-    /** @param array<string, mixed> $context */
-    public function error(Collector $collector, array $context, ?LogOrigin $origin = null): void;
-
-    /** @param array<string, mixed> $context */
-    public function warning(Collector $collector, array $context, ?LogOrigin $origin = null): void;
-
-    /** @param array<string, mixed> $context */
-    public function notice(Collector $collector, array $context, ?LogOrigin $origin = null): void;
-
-    /** @param array<string, mixed> $context */
-    public function info(Collector $collector, array $context, ?LogOrigin $origin = null): void;
-
-    /** @param array<string, mixed> $context */
-    public function debug(Collector $collector, array $context, ?LogOrigin $origin = null): void;
+    public function log(Level $level, Collector $collector, array $context, ?LogOrigin $origin = null): void;
 }

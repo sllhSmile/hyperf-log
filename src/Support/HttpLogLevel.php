@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Sllhsmile\HyperfLog\Support;
 
 use Monolog\Level;
+use Sllhsmile\HyperfLog\Enum\HttpStatusClass;
 
 /**
  * 统一 API 与 SDK 的 HTTP 日志判级策略。
