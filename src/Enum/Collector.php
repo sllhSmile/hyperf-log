@@ -15,6 +15,7 @@ enum Collector: string
     case Database = 'database';
     case Redis = 'redis';
 
+    /** 返回记录中的固定事件类型，与物理日志 channel 独立。 */
     public function type(): string
     {
         return match ($this) {
@@ -25,6 +26,7 @@ enum Collector: string
         };
     }
 
+    /** 返回 Monolog logger name；实际 Handler 由 logger_channel 指定。 */
     public function defaultChannel(): string
     {
         return match ($this) {

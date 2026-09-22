@@ -14,8 +14,10 @@ use Sllhsmile\HyperfLog\Context\RequestContext;
 use Sllhsmile\HyperfLog\Contract\CollectorLoggerInterface;
 use Sllhsmile\HyperfLog\Enum\Collector;
 use Sllhsmile\HyperfLog\Support\HttpLogLevel;
+use Sllhsmile\HyperfLog\Support\InternalDiagnostic;
 use Sllhsmile\HyperfLog\Support\LogConfig;
 use Sllhsmile\HyperfLog\Support\PayloadSnapshotter;
+use Throwable;
 
 /**
  * 在 Hyperf 完成 HTTP 请求后采集 server 日志。
@@ -31,6 +33,7 @@ use Sllhsmile\HyperfLog\Support\PayloadSnapshotter;
  */
 final readonly class ApiLogListener implements ListenerInterface
 {
+    /** 注入请求期快照和日志提交依赖，不在监听器内保存请求数据。 */
     public function __construct(
         private LogConfig $config,
         private CollectorLoggerInterface $logger,
@@ -38,49 +41,57 @@ final readonly class ApiLogListener implements ListenerInterface
         private PayloadSnapshotter $snapshotter,
     ) {}
 
-    /** @return class-string[] */
+    /** 只处理 Hyperf 请求生命周期结束事件。
+     * @return class-string[]
+     */
     public function listen(): array
     {
         return [RequestHandled::class];
     }
 
+    /** 采集请求和响应的安全快照；运行期采集失败不改变原业务响应。 */
     public function process(object $event): void
     {
         if (! $event instanceof RequestHandled || ! $this->config->enabled(Collector::Api)) {
             return;
         }
 
-        $context = [];
-        $protections = [];
-        if ($event->request instanceof ServerRequestInterface) {
-            $context['request'] = $this->request($event->request, $protections);
-        }
-        if ($event->response instanceof ResponseInterface) {
-            $context['response'] = $this->response($event->response, $protections);
-        }
-        if ($event->exception !== null) {
-            $context['error'] = [
-                'type' => $event->exception::class,
-                'message' => $event->exception->getMessage(),
-                'code' => $event->exception->getCode(),
-            ];
-        }
-        $startedAt = $this->requestContext->startTime();
-        if ($startedAt !== null) {
-            $context['duration_ms'] = round((microtime(true) - $startedAt) * 1000, 2);
-        }
-        if ($protections !== []) {
-            $context['payload_protection'] = $protections;
-        }
+        try {
+            $context = [];
+            $protections = [];
+            if ($event->request instanceof ServerRequestInterface) {
+                $context['request'] = $this->request($event->request, $protections);
+            }
+            if ($event->response instanceof ResponseInterface) {
+                $context['response'] = $this->response($event->response, $protections);
+            }
+            if ($event->exception !== null) {
+                $context['error'] = [
+                    'type' => $event->exception::class,
+                    'message' => $event->exception->getMessage(),
+                    'code' => $event->exception->getCode(),
+                ];
+            }
+            $startedAt = $this->requestContext->startTime();
+            if ($startedAt !== null) {
+                $context['duration_ms'] = round((microtime(true) - $startedAt) * 1000, 2);
+            }
+            if ($protections !== []) {
+                $context['payload_protection'] = $protections;
+            }
 
-        $this->logger->log(
-            HttpLogLevel::resolve($context['response']['status_code'] ?? null, isset($context['error'])),
-            Collector::Api,
-            $context,
-        );
+            $this->logger->log(
+                HttpLogLevel::resolve($context['response']['status_code'] ?? null, isset($context['error'])),
+                Collector::Api,
+                $context,
+            );
+        } catch (Throwable $exception) {
+            InternalDiagnostic::reportException('hyperf-log api prepare failed', $exception, $this->requestContext->id());
+        }
     }
 
     /**
+     * 构建入站请求快照；multipart 不读取上传文件内容。
      * @param array<int, array<string, int|string>> $protections
      * @param-out array<int, array<string, int|string>> $protections
      * @return array<string, mixed>
@@ -110,6 +121,7 @@ final readonly class ApiLogListener implements ListenerInterface
     }
 
     /**
+     * 始终保留真实 HTTP 状态码，并按构造期配置快照决定是否读取响应详情。
      * @param array<int, array<string, int|string>> $protections
      * @param-out array<int, array<string, int|string>> $protections
      * @return array<string, mixed>
@@ -127,6 +139,7 @@ final readonly class ApiLogListener implements ListenerInterface
     }
 
     /**
+     * 安全记录正文快照及其无法读取时的保护标记。
      * @param array<string, mixed> $message
      * @param array<int, array<string, int|string>> $protections
      * @param-out array<int, array<string, int|string>> $protections
@@ -142,12 +155,14 @@ final readonly class ApiLogListener implements ListenerInterface
         }
     }
 
+    /** 仅对 multipart 表单采用解析字段和上传元信息，避免读取文件流。 */
     private function isMultipart(ServerRequestInterface $request): bool
     {
         return strtolower(trim(explode(';', $request->getHeaderLine('content-type'), 2)[0])) === 'multipart/form-data';
     }
 
     /**
+     * 递归保存上传文件元数据；永不读取上传内容。
      * @param array<array-key, mixed> $files
      * @return array<array-key, mixed>
      */

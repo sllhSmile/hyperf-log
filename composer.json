@@ -25,19 +25,25 @@
         "ext-swoole": ">=5.0",
         "php": ">=8.2",
         "guzzlehttp/guzzle": "^7.0",
+        "guzzlehttp/promises": "^2.5",
         "hyperf/command": "^3.2",
         "hyperf/context": "^3.2",
         "hyperf/contract": "^3.2",
         "hyperf/coroutine": "^3.2",
         "hyperf/database": "^3.2",
         "hyperf/di": "^3.2",
+        "hyperf/engine": "^2.14",
         "hyperf/event": "^3.2",
-        "hyperf/guzzle": "^3.2",
+        "hyperf/framework": "^3.2",
         "hyperf/http-message": "^3.2",
         "hyperf/http-server": "^3.2",
         "hyperf/logger": "^3.2",
         "hyperf/redis": "^3.2",
+        "hyperf/server": "^3.2",
         "monolog/monolog": "^3.1",
+        "psr/http-message": "^1.0 || ^2.0",
+        "psr/http-server-handler": "^1.0",
+        "psr/http-server-middleware": "^1.0",
         "ramsey/uuid": "^4.7"
     },
     "autoload": {
@@ -53,10 +59,10 @@
     "require-dev": {
         "friendsofphp/php-cs-fixer": "^3.89",
         "hyperf/config": "^3.2",
+        "nikic/php-parser": "^5.0",
         "phpstan/phpstan": "^2.1",
         "phpunit/phpunit": "^11.0"
     },
-    "minimum-stability": "dev",
     "prefer-stable": true,
     "config": {
         "sort-packages": true

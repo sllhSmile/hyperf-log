@@ -21,8 +21,10 @@ final class GuzzleLogAspect extends AbstractAspect
     /** @var list<string> */
     public array $classes = [Client::class . '::__construct'];
 
+    /** 将 middleware 安装逻辑委托给可重复调用的 installer。 */
     public function __construct(private readonly GuzzleMiddlewareInstaller $installer) {}
 
+    /** 等客户端构造完毕后安装 middleware，避免改动非 HandlerStack handler。 */
     public function process(ProceedingJoinPoint $proceedingJoinPoint): mixed
     {
         $result = $proceedingJoinPoint->process();

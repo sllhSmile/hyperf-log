@@ -7,8 +7,10 @@ namespace Sllhsmile\HyperfLog\Listener;
 use Hyperf\Database\Events\QueryExecuted;
 use Hyperf\Event\Contract\ListenerInterface;
 use Monolog\Level;
+use Sllhsmile\HyperfLog\Context\RequestContext;
 use Sllhsmile\HyperfLog\Contract\CollectorLoggerInterface;
 use Sllhsmile\HyperfLog\Enum\Collector;
+use Sllhsmile\HyperfLog\Support\InternalDiagnostic;
 use Sllhsmile\HyperfLog\Support\LogConfig;
 use Sllhsmile\HyperfLog\Support\SqlInterpolator;
 use Throwable;
@@ -25,39 +27,47 @@ use Throwable;
  */
 final readonly class DatabaseLogListener implements ListenerInterface
 {
+    /** SQL 插值仅用于日志展示，注入独立处理器避免改变数据库调用。 */
     public function __construct(
         private LogConfig $config,
         private CollectorLoggerInterface $logger,
         private SqlInterpolator $sqlInterpolator,
     ) {}
 
-    /** @return class-string[] */
+    /** 只监听数据库完成查询后派发的 QueryExecuted。
+     * @return class-string[]
+     */
     public function listen(): array
     {
         return [QueryExecuted::class];
     }
 
+    /** 将已完成的查询转换为日志；插值或日志实现失败不改变查询结果。 */
     public function process(object $event): void
     {
         if (! $event instanceof QueryExecuted || ! $this->config->enabled(Collector::Database)) {
             return;
         }
-        $context = [
-            'duration_ms' => $event->time,
-            'request' => [
-                'database' => $event->connection->getDatabaseName(),
-                'connection' => $event->connectionName,
-                'sql' => $this->sqlInterpolator->interpolate($event->sql, $event->bindings, $event->connection),
-            ],
-        ];
-        if ($this->config->responseEnabled(Collector::Database)) {
-            $context['response'] = ['body' => $event->result];
-        }
+        try {
+            $context = [
+                'duration_ms' => $event->time,
+                'request' => [
+                    'database' => $event->connection->getDatabaseName(),
+                    'connection' => $event->connectionName,
+                    'sql' => $this->sqlInterpolator->interpolate($event->sql, $event->bindings, $event->connection),
+                ],
+            ];
+            if ($this->config->responseEnabled(Collector::Database)) {
+                $context['response'] = ['body' => $event->result];
+            }
 
-        $this->logger->log(
-            $event->result instanceof Throwable ? Level::Error : Level::Info,
-            Collector::Database,
-            $context,
-        );
+            $this->logger->log(
+                $event->result instanceof Throwable ? Level::Error : Level::Info,
+                Collector::Database,
+                $context,
+            );
+        } catch (Throwable $exception) {
+            InternalDiagnostic::reportException('hyperf-log database prepare failed', $exception, (new RequestContext())->id());
+        }
     }
 }

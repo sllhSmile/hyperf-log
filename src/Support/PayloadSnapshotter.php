@@ -20,8 +20,10 @@ use Throwable;
  */
 final readonly class PayloadSnapshotter
 {
+    /** 注入动态单字段容量限制，不缓存请求期 Stream。 */
     public function __construct(private LogConfig $config) {}
 
+    /** 在不改变业务读取位置的前提下取得有界正文快照。 */
     public function snapshot(StreamInterface $stream, string $path): PayloadSnapshot
     {
         $limit = $this->config->payloadMaxBytes();
@@ -73,6 +75,7 @@ final readonly class PayloadSnapshotter
         return new PayloadSnapshot($contents);
     }
 
+    /** 创建省略正文的快照，并附带机器可读的保护原因。 */
     private function omitted(
         string $path,
         PayloadReason $reason,
@@ -88,6 +91,7 @@ final readonly class PayloadSnapshotter
         ));
     }
 
+    /** 最多读取指定字节，避免未知长度流被一次性完整加载。 */
     private function readUpTo(StreamInterface $stream, int $bytes): string
     {
         $contents = '';

@@ -17,16 +17,20 @@ use Sllhsmile\HyperfLog\Context\RequestContext;
  */
 final class CommandTraceListener implements ListenerInterface
 {
+    /** 由 Hyperf 注入协程上下文管理器，不在监听器内缓存命令链路。 */
     public function __construct(
         private readonly RequestContext $requestContext,
     ) {}
 
-    /** @return class-string[] */
+    /** 在每次命令开始处理前初始化新的 trace。
+     * @return class-string[]
+     */
     public function listen(): array
     {
         return [BeforeHandle::class];
     }
 
+    /** 覆盖上一次命令的协程链路状态，避免同一进程复用旧 ID。 */
     public function process(object $event): void
     {
         if (! $event instanceof BeforeHandle) {

@@ -10,6 +10,7 @@ use Sllhsmile\HyperfLog\Enum\PayloadReason;
 /** 描述一次截断或省略动作，供日志使用者判断 payload 是否完整。 */
 final readonly class PayloadProtection
 {
+    /** 创建一条稳定的 payload 截断或省略记录。 */
     public function __construct(
         public string $path,
         public PayloadAction $action,
@@ -18,7 +19,9 @@ final readonly class PayloadProtection
         public ?int $originalBytes = null,
     ) {}
 
-    /** @return array{path:string,action:string,reason:string,limit_bytes?:int,original_bytes?:int} */
+    /** 转为 JSON Schema 约定的保护动作结构。
+     * @return array{path:string,action:string,reason:string,limit_bytes?:int,original_bytes?:int}
+     */
     public function toArray(): array
     {
         $result = [

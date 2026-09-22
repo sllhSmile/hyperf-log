@@ -67,6 +67,28 @@ final class LogConfigTest extends TestCase
         self::assertSame('daily', $config->loggerChannel());
     }
 
+    public function testConfigurationIsSnapshottedAtConstruction(): void
+    {
+        $values = new Config([
+            'app_name' => 'original-service',
+            'trace_log' => [
+                'write_mode' => WriteMode::SYNC,
+                'collectors' => ['api' => ['enabled' => true, 'response_enabled' => false]],
+            ],
+        ]);
+        $config = new LogConfig($values);
+
+        $values->set('app_name', 'changed-service');
+        $values->set('trace_log.write_mode', WriteMode::ASYNC);
+        $values->set('trace_log.collectors.api.enabled', false);
+        $values->set('trace_log.collectors.api.response_enabled', true);
+
+        self::assertSame('original-service', $config->service());
+        self::assertSame(WriteMode::SYNC, $config->writeMode());
+        self::assertTrue($config->enabled(Collector::Api));
+        self::assertFalse($config->responseEnabled(Collector::Api));
+    }
+
     public function testInvalidLoggerChannelFailsFast(): void
     {
         $this->expectException(\InvalidArgumentException::class);

@@ -13,5 +13,6 @@ use Sllhsmile\HyperfLog\Enum\Collector;
  */
 final readonly class LogMetadata
 {
+    /** 将采集器身份与发起位置快照作为 Formatter 的内部标记。 */
     public function __construct(public Collector $collector, public LogOrigin $origin) {}
 }

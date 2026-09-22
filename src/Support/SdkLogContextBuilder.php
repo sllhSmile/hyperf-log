@@ -18,9 +18,12 @@ use Throwable;
  */
 final readonly class SdkLogContextBuilder
 {
+    /** 组合 SDK 响应开关与请求期 Stream 快照器。 */
     public function __construct(private LogConfig $config, private PayloadSnapshotter $snapshotter) {}
 
-    /** @return array<string, mixed> */
+    /** 在请求交给 handler 前快照可能被消费的请求体。
+     * @return array<string, mixed>
+     */
     public function request(RequestInterface $request): array
     {
         $context = [
@@ -41,6 +44,8 @@ final readonly class SdkLogContextBuilder
     }
 
     /**
+     * 合并 Promise 完成后的响应、错误、耗时及请求期保护记录。
+     *
      * @param array<string, mixed> $request
      * @return array<string, mixed>
      */

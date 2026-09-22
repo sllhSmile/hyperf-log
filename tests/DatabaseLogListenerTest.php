@@ -10,6 +10,7 @@ use Hyperf\Database\Events\QueryExecuted;
 use Monolog\Level;
 use PDO;
 use PHPUnit\Framework\TestCase;
+use RuntimeException;
 use Sllhsmile\HyperfLog\Contract\CollectorLoggerInterface;
 use Sllhsmile\HyperfLog\Enum\Collector;
 use Sllhsmile\HyperfLog\Listener\DatabaseLogListener;
@@ -83,6 +84,23 @@ final class DatabaseLogListenerTest extends TestCase
 
         $listener->process(new \stdClass());
         $listener->process(new QueryExecuted('select ?', [1], 2.5, $this->connection()));
+    }
+
+    public function testSqlInterpolationFailureDoesNotEscapeIntoTheExecutedQuery(): void
+    {
+        $connection = $this->createMock(Connection::class);
+        $connection->method('getDatabaseName')->willReturn('testing');
+        $connection->method('prepareBindings')->willThrowException(new RuntimeException('prepare failed'));
+        $logger = $this->createMock(CollectorLoggerInterface::class);
+        $logger->expects(self::never())->method('log');
+        $config = new LogConfig(new Config(['trace_log' => ['collectors' => [
+            'database' => ['enabled' => true],
+        ]]]));
+
+        (new DatabaseLogListener($config, $logger, new SqlInterpolator()))
+            ->process(new QueryExecuted('select ?', [1], 2.5, $connection));
+
+        self::addToAssertionCount(1);
     }
 
 }

@@ -19,14 +19,18 @@ use Sllhsmile\HyperfLog\Support\CollectorLogger;
  */
 final class DispatcherLifecycleListener implements ListenerInterface
 {
+    /** 保存采集日志接口；只对内置实现执行 drain。 */
     public function __construct(private readonly CollectorLoggerInterface $logger) {}
 
-    /** @return class-string[] */
+    /** 返回支持排空内置异步队列的 Worker、Server 和 CLI 生命周期事件。
+     * @return class-string[]
+     */
     public function listen(): array
     {
         return [OnWorkerExit::class, AllCoroutineServersClosed::class, AfterExecute::class];
     }
 
+    /** 在退出事件上排空内置队列，不接管自定义 logger 的资源生命周期。 */
     public function process(object $event): void
     {
         if ($event instanceof OnWorkerExit || $event instanceof AllCoroutineServersClosed || $event instanceof AfterExecute) {

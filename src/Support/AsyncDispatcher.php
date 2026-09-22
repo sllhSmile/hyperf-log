@@ -48,6 +48,7 @@ final class AsyncDispatcher
     private ?int $writerOwner = null;
     private bool $consumerRunning = false;
 
+    /** 保存每个 Worker 的写入依赖；队列仍在首次异步提交时创建。 */
     public function __construct(
         private readonly LoggerFactory $factory,
         private readonly LogConfig $config,
@@ -66,14 +67,7 @@ final class AsyncDispatcher
         $this->startConsumer();
         ++$this->pending;
         if (! $this->consumerRunning || ! $this->accepting || $entry->estimatedBytes > $this->config->asyncMaxBufferBytes()) {
-            ++$this->fallbacks;
-            $this->reportFallbackOnce();
-            try {
-                $this->writeSerialized($entry);
-            } finally {
-                --$this->pending;
-                $this->maybeComplete();
-            }
+            $this->fallbackToSync($entry);
             return;
         }
 
@@ -82,17 +76,12 @@ final class AsyncDispatcher
             return;
         }
 
-        ++$this->fallbacks;
-        $this->reportFallbackOnce();
-        try {
-            $this->writeSerialized($entry);
-        } finally {
-            --$this->pending;
-            $this->maybeComplete();
-        }
+        $this->fallbackToSync($entry);
     }
 
-    /** @return array{queued:int,queued_bytes:int,pending:int,inflight:int,fallbacks:int,writes:int,failures:int,dropped:int} */
+    /** 返回当前队列与写入统计，供退出诊断和测试使用。
+     * @return array{queued:int,queued_bytes:int,pending:int,inflight:int,fallbacks:int,writes:int,failures:int,dropped:int}
+     */
     public function stats(): array
     {
         return [
@@ -107,6 +96,7 @@ final class AsyncDispatcher
         ];
     }
 
+    /** 首次异步提交时建立有界队列及供排空和串行写入使用的信号通道。 */
     private function startIfNeeded(): void
     {
         if ($this->started) {
@@ -130,6 +120,7 @@ final class AsyncDispatcher
         $this->beginDrain();
     }
 
+    /** 消费协程退出或创建失败后按需重启；失败时由提交者同步回退。 */
     private function startConsumer(): void
     {
         if ($this->consumerRunning || $this->queue === null || $this->completed) {
@@ -145,6 +136,7 @@ final class AsyncDispatcher
         }
     }
 
+    /** 在不让出协程的临界区预留预算并尝试入队。 */
     private function tryEnqueue(LogEntry $entry): bool
     {
         if (! $this->accepting || $this->queue === null) {
@@ -166,12 +158,14 @@ final class AsyncDispatcher
         return false;
     }
 
+    /** 队列暂满时让出 1ms，然后最多重试一次入队。 */
     private function waitAndRetry(LogEntry $entry): bool
     {
         Coroutine::sleep(self::ENQUEUE_WAIT_SECONDS);
         return $this->accepting && $this->tryEnqueue($entry);
     }
 
+    /** 消费队列并确保每条已取出的日志在写入后释放预算及待处理计数。 */
     private function consume(): void
     {
         try {
@@ -196,6 +190,7 @@ final class AsyncDispatcher
         }
     }
 
+    /** 停止接收异步任务，等待现有任务或在超时后丢弃尚未写入的队列条目。 */
     private function beginDrain(): void
     {
         if ($this->completed || $this->draining || ! $this->started) {
@@ -227,6 +222,7 @@ final class AsyncDispatcher
         }
     }
 
+    /** 超时后只丢弃尚在队列的条目，不能中断已进入 Handler 的写入。 */
     private function dropQueuedEntries(): void
     {
         if ($this->queue === null) {
@@ -243,6 +239,7 @@ final class AsyncDispatcher
         }
     }
 
+    /** 仅在 drain 阶段且所有已提交任务都完成时关闭队列。 */
     private function maybeComplete(): void
     {
         if ($this->draining && $this->pending === 0 && $this->inflight === 0) {
@@ -250,6 +247,7 @@ final class AsyncDispatcher
         }
     }
 
+    /** 关闭队列并始终向 PHP error_log 报告本次正常排空的最终统计。 */
     private function completeDrain(): void
     {
         if ($this->completed) {
@@ -311,6 +309,7 @@ final class AsyncDispatcher
         }
     }
 
+    /** 提交到选定的 Hyperf logger，并隔离 Handler 的运行期异常。 */
     private function writeHandler(LogEntry $entry): void
     {
         ++$this->writes;
@@ -334,6 +333,20 @@ final class AsyncDispatcher
         }
     }
 
+    /** 同步回退仍占用 pending；无论写入结果如何都必须完成计数与 drain 检查。 */
+    private function fallbackToSync(LogEntry $entry): void
+    {
+        ++$this->fallbacks;
+        $this->reportFallbackOnce();
+        try {
+            $this->writeSerialized($entry);
+        } finally {
+            --$this->pending;
+            $this->maybeComplete();
+        }
+    }
+
+    /** 每个 dispatcher 只报告一次队列满载，避免高并发时反复输出。 */
     private function reportFallbackOnce(): void
     {
         if ($this->fallbackReported) {
@@ -343,6 +356,7 @@ final class AsyncDispatcher
         $this->report('hyperf-log async queue saturated; falling back to sync');
     }
 
+    /** 将内部队列状态输出到 PHP error_log，不进入本包的 Handler。 */
     private function report(string $message): void
     {
         error_log($message);

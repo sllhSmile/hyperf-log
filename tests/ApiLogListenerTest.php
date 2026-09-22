@@ -160,6 +160,18 @@ final class ApiLogListenerTest extends TestCase
         $listener->process(new RequestHandled(new ServerRequest('GET', '/'), new Response()));
     }
 
+    public function testRuntimeCollectionFailureDoesNotEscapeIntoTheHandledRequest(): void
+    {
+        $response = $this->createMock(ResponseInterface::class);
+        $response->method('getStatusCode')->willThrowException(new RuntimeException('snapshot failed'));
+        $logger = $this->createMock(CollectorLoggerInterface::class);
+        $logger->expects(self::never())->method('log');
+
+        $this->listener($logger)->process(new RequestHandled(new ServerRequest('GET', '/'), $response));
+
+        self::addToAssertionCount(1);
+    }
+
     private function listener(CollectorLoggerInterface $logger, bool $response = true): ApiLogListener
     {
         $config = new LogConfig(new Config(['trace_log' => ['collectors' => [

@@ -14,7 +14,9 @@ use Hyperf\Database\ConnectionInterface;
  */
 final class SqlInterpolator
 {
-    /** @param array<int|string, mixed> $bindings */
+    /** 跳过 SQL 字面量和注释，只替换实际位置或命名占位符。
+     * @param array<int|string, mixed> $bindings
+     */
     public function interpolate(string $sql, array $bindings, ConnectionInterface $connection): string
     {
         $bindings = $connection->prepareBindings($bindings);
@@ -77,6 +79,7 @@ final class SqlInterpolator
         return $result;
     }
 
+    /** 优先使用连接 PDO 规则生成仅供展示的绑定值文本。 */
     private function quote(mixed $value, ConnectionInterface $connection): string
     {
         if ($value === null) {

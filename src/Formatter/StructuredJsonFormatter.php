@@ -38,6 +38,7 @@ final class StructuredJsonFormatter extends JsonFormatter
 
     private readonly DateTimeZone $timezone;
 
+    /** 固定北京时间与单行 JSON 输出，统一普通日志和采集日志格式。 */
     public function __construct(
         private readonly RequestContext $requestContext,
         private readonly LogConfig $config,
@@ -46,6 +47,7 @@ final class StructuredJsonFormatter extends JsonFormatter
         parent::__construct(self::BATCH_MODE_JSON, true);
     }
 
+    /** 使用采集快照填充 envelope；普通日志才读取格式化时的协程上下文。 */
     public function format(LogRecord $record): string
     {
         $context = $record->context;

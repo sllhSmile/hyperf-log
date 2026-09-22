@@ -12,5 +12,6 @@ namespace Sllhsmile\HyperfLog\Support;
  */
 final readonly class LogOrigin
 {
+    /** 固化操作发起时的 request-id 和协程 ID，允许跨协程传递。 */
     public function __construct(public ?string $requestId, public int $coroutineId) {}
 }

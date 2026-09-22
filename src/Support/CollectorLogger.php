@@ -22,6 +22,7 @@ use Throwable;
  */
 final readonly class CollectorLogger implements CollectorLoggerInterface
 {
+    /** 构造每 Worker 独立的 dispatcher，并保留提交期上下文依赖。 */
     public function __construct(
         LoggerFactory $factory,
         LogConfig $config,
@@ -39,7 +40,9 @@ final readonly class CollectorLogger implements CollectorLoggerInterface
         $this->dispatcher->drain();
     }
 
-    /** @param array<string, mixed> $context */
+    /** 同步保护并快照日志上下文，再按 write_mode 提交 Handler IO。
+     * @param array<string, mixed> $context
+     */
     public function log(Level $level, Collector $collector, array $context, ?LogOrigin $origin = null): void
     {
         $datetime = new JsonSerializableDateTimeImmutable(true);

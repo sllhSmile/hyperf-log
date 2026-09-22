@@ -19,6 +19,8 @@ use Sllhsmile\HyperfLog\Enum\Collector;
 interface PayloadProcessorInterface
 {
     /**
+     * 在日志提交之前保护已完成快照的上下文，不读取请求期资源。
+     *
      * @param Collector $collector 日志采集器
      * @param array<string, mixed> $context 已由调用方完成请求/响应资源快照的日志上下文
      * @return array<string, mixed> 可安全交给 Formatter 和日志 Handler 的上下文副本

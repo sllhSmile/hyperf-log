@@ -17,7 +17,9 @@ use Monolog\Level;
  */
 final readonly class LogEntry
 {
-    /** @param array<string, mixed> $context */
+    /** 创建不再依赖提交协程 Context 的完整日志写入单元。
+     * @param array<string, mixed> $context
+     */
     public function __construct(
         public LogMetadata $metadata,
         public Level $level,

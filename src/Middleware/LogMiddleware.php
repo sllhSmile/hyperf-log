@@ -22,8 +22,10 @@ use Sllhsmile\HyperfLog\Support\LogConfig;
  */
 final class LogMiddleware implements MiddlewareInterface
 {
+    /** 注入入口链路配置与协程上下文，不保存跨请求的 trace。 */
     public function __construct(private readonly LogConfig $config, private readonly RequestContext $requestContext) {}
 
+    /** 初始化当前 HTTP 链路，并在正常及异常响应路径透传 request-id。 */
     public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface
     {
         $requestIdHeader = $this->config->requestIdHeader();

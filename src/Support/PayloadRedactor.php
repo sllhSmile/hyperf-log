@@ -18,9 +18,12 @@ use Sllhsmile\HyperfLog\Enum\PayloadReason;
  */
 final readonly class PayloadRedactor
 {
+    /** 注入构造期配置快照，复用已校验的敏感字段和替换值。 */
     public function __construct(private LogConfig $config) {}
 
     /**
+     * 脱敏 HTTP Header、URL query 和可识别的结构化正文。
+     *
      * @param array<string, mixed> $context
      * @return array<string, mixed>
      */
@@ -48,6 +51,8 @@ final readonly class PayloadRedactor
     }
 
     /**
+     * 递归按不区分大小写的字段名替换结构化值。
+     *
      * @param array<array-key, mixed> $value
      * @param array<string, true> $fields
      * @return array<array-key, mixed>
@@ -68,6 +73,8 @@ final readonly class PayloadRedactor
     }
 
     /**
+     * 规范化 Header 名称和值，并遮蔽命中的敏感 Header。
+     *
      * @param array<array-key, mixed> $headers
      * @param array<string, true> $fields
      * @return array<string, mixed>
@@ -86,6 +93,8 @@ final readonly class PayloadRedactor
     }
 
     /**
+     * 从日志消息中提取并脱敏 Header；不存在合法 Header 时返回 null。
+     *
      * @param array<string, true> $fields
      * @return array<string, mixed>|null
      */
@@ -99,6 +108,8 @@ final readonly class PayloadRedactor
     }
 
     /**
+     * 保持 URL 编码结构，仅替换 query 中命中的敏感参数。
+     *
      * @param array<string, mixed> $context
      * @param array<string, true> $fields
      */
@@ -117,6 +128,8 @@ final readonly class PayloadRedactor
     }
 
     /**
+     * 按 Content-Type 脱敏表单或 JSON；无效显式 JSON 采用 fail-closed。
+     *
      * @param array<string, mixed> $context
      * @param array<string, true> $fields
      */
@@ -154,7 +167,9 @@ final readonly class PayloadRedactor
             : $decoded;
     }
 
-    /** @param array<string, true> $fields */
+    /** 保留 query 分隔符和原键编码，仅替换敏感键对应的值。
+     * @param array<string, true> $fields
+     */
     private function redactQuery(string $query, array $fields, string $replacement): string
     {
         $segments = preg_split('/([&;])/', $query, -1, PREG_SPLIT_DELIM_CAPTURE);
@@ -175,6 +190,7 @@ final readonly class PayloadRedactor
         return implode('', $segments);
     }
 
+    /** 从消息 Header 中提取规范化且不含参数的 Content-Type。 */
     private function contentType(mixed $message): string
     {
         if (! is_array($message) || ! is_array($message['headers'] ?? null)) {
@@ -191,6 +207,7 @@ final readonly class PayloadRedactor
         return '';
     }
 
+    /** 识别标准 JSON 和供应商 +json 媒体类型。 */
     private function isJson(string $contentType): bool
     {
         return $contentType === 'application/json' || str_ends_with($contentType, '+json');

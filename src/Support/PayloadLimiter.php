@@ -17,9 +17,12 @@ use Sllhsmile\HyperfLog\Enum\PayloadReason;
  */
 final readonly class PayloadLimiter
 {
+    /** 注入构造期配置快照；后续处理复用已校验的容量上限。 */
     public function __construct(private LogConfig $config) {}
 
     /**
+     * 对采集器约定的大字段逐一应用单字段字节上限。
+     *
      * @param array<string, mixed> $context
      * @return array<string, mixed>
      */
@@ -41,7 +44,9 @@ final readonly class PayloadLimiter
         return $context;
     }
 
-    /** @param array<string, mixed> $context */
+    /** 截断文本或省略结构化字段，并追加对应 payload_protection。
+     * @param array<string, mixed> $context
+     */
     private function limitPath(array &$context, string $path, int $limit): void
     {
         $segments = explode('.', $path);
@@ -80,6 +85,7 @@ final readonly class PayloadLimiter
         ))->toArray();
     }
 
+    /** 生成不超过上限的 UTF-8 安全预览；二进制内容先转为 base64 文本。 */
     private function truncate(string $value, int $limit): string
     {
         // 非 UTF-8 二进制先转为可安全写入 JSON 的文本，再执行同一字节限制。

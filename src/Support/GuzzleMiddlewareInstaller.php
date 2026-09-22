@@ -27,6 +27,7 @@ use Throwable;
  */
 final readonly class GuzzleMiddlewareInstaller
 {
+    /** 注入请求期上下文构建与日志提交依赖，不保存单次请求状态。 */
     public function __construct(
         private LogConfig $config,
         private RequestContext $requestContext,
@@ -34,6 +35,7 @@ final readonly class GuzzleMiddlewareInstaller
         private CollectorLoggerInterface $logger,
     ) {}
 
+    /** 以固定名称幂等安装 request-id 透传和 SDK 日志 middleware。 */
     public function install(HandlerStack $stack): void
     {
         // Aspect 可能多次遇到同一 stack；固定名称保证安装操作幂等。
@@ -41,6 +43,7 @@ final readonly class GuzzleMiddlewareInstaller
         $stack->push($this->requestMiddleware(), 'hyperf_log_request');
     }
 
+    /** 构造围绕底层 handler 的两阶段快照 middleware。 */
     private function requestMiddleware(): callable
     {
         return function (callable $handler): callable {
@@ -114,6 +117,7 @@ final readonly class GuzzleMiddlewareInstaller
         }
     }
 
+    /** 使用统一单行格式报告 SDK 采集阶段故障。 */
     private function reportFailure(string $stage, Throwable $exception, ?string $requestId): void
     {
         InternalDiagnostic::reportException(sprintf('hyperf-log sdk %s failed', $stage), $exception, $requestId);

@@ -16,6 +16,7 @@ use Sllhsmile\HyperfLog\Enum\HttpStatusClass;
  */
 final class HttpLogLevel
 {
+    /** 异常优先于状态码；4xx 为 WARNING、5xx 为 ERROR，其余为 INFO。 */
     public static function resolve(mixed $statusCode, bool $hasError): Level
     {
         if ($hasError) {
@@ -31,5 +32,6 @@ final class HttpLogLevel
         };
     }
 
+    /** 纯静态策略类不允许实例化。 */
     private function __construct() {}
 }

@@ -17,6 +17,8 @@ use Sllhsmile\HyperfLog\Support\LogOrigin;
 interface CollectorLoggerInterface
 {
     /**
+     * 在源执行单元提交指定级别的采集日志；跨协程回调必须显式传入 origin。
+     *
      * @param array<string, mixed> $context 已完成请求期资源快照的结构化上下文
      * @param null|LogOrigin $origin 操作发起时的链路快照；异步完成场景不得重新读取当前 Context
      */

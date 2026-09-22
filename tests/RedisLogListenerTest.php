@@ -66,6 +66,30 @@ final class RedisLogListenerTest extends TestCase
         $listener->process($this->event('GET', ['key'], 'value'));
     }
 
+    public function testCommandFormattingFailureDoesNotEscapeIntoTheExecutedCommand(): void
+    {
+        $event = new class extends CommandExecuted {
+            public function __construct() {}
+
+            public function getFormatCommand(): string
+            {
+                throw new RuntimeException('format failed');
+            }
+        };
+        $event->command = 'GET';
+        $event->parameters = ['key'];
+        $event->time = 1.2;
+        $event->connectionName = 'default';
+        $event->result = 'value';
+        $event->throwable = null;
+        $logger = $this->createMock(CollectorLoggerInterface::class);
+        $logger->expects(self::never())->method('log');
+
+        $this->listener($logger)->process($event);
+
+        self::addToAssertionCount(1);
+    }
+
     private function listener(CollectorLoggerInterface $logger, bool $response = false): RedisLogListener
     {
         return new RedisLogListener(new LogConfig(new Config(['trace_log' => ['collectors' => [
