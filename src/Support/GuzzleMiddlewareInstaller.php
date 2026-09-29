@@ -8,6 +8,7 @@ use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Promise\Create;
 use GuzzleHttp\Promise\PromiseInterface;
 use Hyperf\Coroutine\Coroutine;
+use Monolog\Level;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
 use Sllhsmile\HyperfLog\Context\RequestContext;
@@ -77,6 +78,8 @@ final readonly class GuzzleMiddlewareInstaller
                     function (mixed $response) use ($requestSnapshot, $startedAt, $origin): mixed {
                         if ($response instanceof ResponseInterface) {
                             $this->writeSafely($requestSnapshot, $startedAt, $response, null, $origin);
+                        } else {
+                            $this->writeUnexpectedSafely($requestSnapshot, $startedAt, $response, $origin);
                         }
 
                         return $response;
@@ -121,5 +124,24 @@ final readonly class GuzzleMiddlewareInstaller
     private function reportFailure(string $stage, Throwable $exception, ?string $requestId): void
     {
         InternalDiagnostic::reportException(sprintf('hyperf-log sdk %s failed', $stage), $exception, $requestId);
+    }
+
+    /**
+     * 记录非标准 fulfilled 值的类型，不序列化未知返回对象或其内容。
+     *
+     * @param array<string, mixed> $request
+     */
+    private function writeUnexpectedSafely(
+        array $request,
+        float $startedAt,
+        mixed $response,
+        LogOrigin $origin,
+    ): void {
+        try {
+            $context = $this->contextBuilder->completeUnexpected($request, $startedAt, $response);
+            $this->logger->log(Level::Warning, Collector::Sdk, $context, $origin);
+        } catch (Throwable $exception) {
+            $this->reportFailure('write', $exception, $origin->requestId);
+        }
     }
 }

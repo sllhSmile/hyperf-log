@@ -9,6 +9,7 @@ use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Promise\Create;
 use GuzzleHttp\Promise\Promise;
 use GuzzleHttp\Promise\Utils as PromiseUtils;
+use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use Hyperf\Config\Config;
 use Hyperf\Context\Context;
@@ -89,6 +90,26 @@ final class GuzzleMiddlewareInstallerTest extends TestCase
         } catch (RuntimeException $caught) {
             self::assertSame($error, $caught);
         }
+    }
+
+    public function testUnexpectedFulfilledValueIsWarnedWithoutSerialization(): void
+    {
+        $unexpected = ['secret' => 'must-not-log'];
+        $stack = HandlerStack::create(static fn() => Create::promiseFor($unexpected));
+        $logger = $this->createMock(CollectorLoggerInterface::class);
+        $logger->expects(self::once())->method('log')->with(
+            Level::Warning,
+            Collector::Sdk,
+            self::callback(static fn(array $value): bool =>
+                $value['error'] === ['type' => 'unexpected_response', 'value_type' => 'array']
+                && array_keys($value) === ['duration_ms', 'request', 'error']),
+            self::isInstanceOf(LogOrigin::class),
+        );
+        $this->installer($this->config(true, true), new RequestContext(), $logger)->install($stack);
+
+        $result = Create::promiseFor($stack(new Request('GET', 'https://example.test'), []))->wait();
+
+        self::assertSame($unexpected, $result);
     }
 
     #[\PHPUnit\Framework\Attributes\DataProvider('disabledResponseErrorStatuses')]

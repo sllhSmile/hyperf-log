@@ -59,4 +59,29 @@ final class LogMiddlewareTest extends TestCase
         self::assertSame($context->id(), $response->getHeaderLine('seen-id'));
         self::assertSame($context->id(), $response->getHeaderLine('x-b3-traceid'));
     }
+
+    public function testItReplacesAnOversizedInboundIdEverywhere(): void
+    {
+        $context = new RequestContext();
+        $middleware = new LogMiddleware(new LogConfig(new Config([])), $context);
+        $handler = new class implements RequestHandlerInterface {
+            public ?ServerRequestInterface $request = null;
+            public function handle(ServerRequestInterface $request): ResponseInterface
+            {
+                $this->request = $request;
+
+                return new Response();
+            }
+        };
+        $oversized = str_repeat('a', RequestContext::MAX_REQUEST_ID_BYTES + 1);
+
+        $response = $middleware->process(new ServerRequest('GET', '/', ['x-b3-traceid' => $oversized]), $handler);
+        $requestId = $context->id();
+
+        self::assertNotNull($requestId);
+        self::assertNotSame($oversized, $requestId);
+        self::assertMatchesRegularExpression('/^[0-9a-f-]{36}$/', $requestId);
+        self::assertSame($requestId, $handler->request?->getHeaderLine('x-b3-traceid'));
+        self::assertSame($requestId, $response->getHeaderLine('x-b3-traceid'));
+    }
 }

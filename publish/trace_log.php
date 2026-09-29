@@ -26,7 +26,7 @@ return [
         // Header、URL query、JSON 和表单字段均按名称递归匹配，不区分大小写。
         'sensitive_fields' => LogConfig::DEFAULT_SENSITIVE_FIELDS,
         'redaction_value' => LogConfig::DEFAULT_REDACTION_VALUE,
-        // 单个大字段的字节上限；字符串截断、结构化值省略，null 表示不限制。
+        // 单个大字段的字节上限；null 会禁用保护，未知长度流可能完整读入内存并导致 OOM。
         'max_bytes' => LogConfig::DEFAULT_PAYLOAD_MAX_BYTES,
     ],
 ];

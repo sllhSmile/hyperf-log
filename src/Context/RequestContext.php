@@ -16,20 +16,34 @@ use Ramsey\Uuid\Uuid;
 final class RequestContext
 {
     public const CONTEXT_KEY = self::class;
+    public const MAX_REQUEST_ID_BYTES = 128;
 
     /**
-     * 开始一条新链路；传入值 trim 后为空时生成按时间有序的 UUID v7。
-     * 非空 ID 使用 trim 后的值，本类不校验其格式或可信来源。
+     * 开始一条新链路；空值或不符合安全 Header 约束的值会生成 UUID v7。
+     * 有效 ID 必须是最多 128 字节、无空白的可打印 ASCII 字符串。
      */
     public function start(?string $requestId = null): TraceContext
     {
-        $requestId = trim($requestId ?? '');
+        $requestId = $this->normalizeRequestId($requestId);
         $trace = new TraceContext(
-            $requestId !== '' ? $requestId : Uuid::uuid7()->toString(),
+            $requestId,
             microtime(true),
         );
 
         return Context::set(self::CONTEXT_KEY, $trace);
+    }
+
+    /** 将外部 request-id 限制为可安全回显和透传的单行 Header 值。 */
+    private function normalizeRequestId(?string $requestId): string
+    {
+        if ($requestId !== null
+            && $requestId !== ''
+            && strlen($requestId) <= self::MAX_REQUEST_ID_BYTES
+            && preg_match('/^[\x21-\x7E]+$/D', $requestId) === 1) {
+            return $requestId;
+        }
+
+        return Uuid::uuid7()->toString();
     }
 
     /** 返回当前链路快照；尚未 start() 时返回 null，且不会隐式创建。 */

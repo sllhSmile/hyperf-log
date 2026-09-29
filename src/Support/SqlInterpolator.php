@@ -45,6 +45,19 @@ final class SqlInterpolator
                 $result .= $character;
                 continue;
             }
+            if ($character === '$'
+                && preg_match('/\G\$([a-zA-Z_][a-zA-Z0-9_]*)?\$/', $sql, $match, 0, $index)) {
+                $delimiter = $match[0];
+                $end = strpos($sql, $delimiter, $index + strlen($delimiter));
+                if ($end === false) {
+                    $result .= substr($sql, $index);
+                    break;
+                }
+                $end += strlen($delimiter);
+                $result .= substr($sql, $index, $end - $index);
+                $index = $end - 1;
+                continue;
+            }
             if (($character === '-' && ($sql[$index + 1] ?? '') === '-') || $character === '#') {
                 $end = strpos($sql, "\n", $index);
                 $end = $end === false ? $length : $end;
@@ -63,7 +76,7 @@ final class SqlInterpolator
                 $result .= $this->quote($bindings[$position++], $connection);
                 continue;
             }
-            if ($character === ':' && ($sql[$index + 1] ?? '') !== ':'
+            if ($character === ':' && ($sql[$index + 1] ?? '') !== ':' && ($sql[$index - 1] ?? '') !== ':'
                 && preg_match('/\G:([a-zA-Z_][a-zA-Z0-9_]*)/', $sql, $match, 0, $index)) {
                 $name = $match[1];
                 $key = array_key_exists($name, $bindings) ? $name : ':' . $name;

@@ -86,4 +86,29 @@ final readonly class SdkLogContextBuilder
 
         return $context;
     }
+
+    /**
+     * 为 fulfilled 但非 PSR-7 响应的自定义 handler 生成安全诊断上下文。
+     *
+     * @param array<string, mixed> $request
+     * @return array<string, mixed>
+     */
+    public function completeUnexpected(array $request, float $startedAt, mixed $response): array
+    {
+        $protections = $request['_payload_protection'] ?? [];
+        unset($request['_payload_protection']);
+        $context = [
+            'duration_ms' => round((microtime(true) - $startedAt) * 1000, 2),
+            'request' => $request,
+            'error' => [
+                'type' => 'unexpected_response',
+                'value_type' => get_debug_type($response),
+            ],
+        ];
+        if ($protections !== []) {
+            $context['payload_protection'] = $protections;
+        }
+
+        return $context;
+    }
 }

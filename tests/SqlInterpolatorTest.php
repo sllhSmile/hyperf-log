@@ -31,6 +31,15 @@ final class SqlInterpolatorTest extends TestCase
         self::assertSame("select 'O''Reilly', 'O''Reilly', 'value', :missing", $result);
     }
 
+    public function testItPreservesPostgresDollarQuotesAndCastNames(): void
+    {
+        $sql = 'select $$begin ?; :name; end$$::jsonb, ?';
+
+        $result = (new SqlInterpolator())->interpolate($sql, [7, 'jsonb' => 'wrong'], $this->connection());
+
+        self::assertSame('select $$begin ?; :name; end$$::jsonb, 7', $result);
+    }
+
     public function testItFormatsScalarsAndPreservesUnboundPlaceholders(): void
     {
         $result = (new SqlInterpolator())->interpolate(

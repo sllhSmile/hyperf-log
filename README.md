@@ -151,7 +151,7 @@ tail -n 1 runtime/logs/trace.log
 | `collectors.redis.response_enabled` | `false` | 是否记录 Redis 命令结果 |
 | `payload.sensitive_fields` | 内置敏感字段列表 | 按字段名递归脱敏，不区分大小写 |
 | `payload.redaction_value` | `****` | 敏感字段替换文本 |
-| `payload.max_bytes` | `65536` | 单字段字节上限；`null` 表示不限制 |
+| `payload.max_bytes` | `65536` | 单字段字节上限；`null` 表示不限制（高风险） |
 
 配置采用严格类型：
 
@@ -237,7 +237,7 @@ final readonly class MessageConsumer
 }
 ```
 
-`start()` 是唯一生成入口；`current()`、`id()` 和 `startTime()` 都是无副作用查询。入站 ID 只会被 trim，不强制要求 UUID 格式。
+`start()` 是唯一生成入口；`current()`、`id()` 和 `startTime()` 都是无副作用查询。入站 ID 必须是最多 128 字节、无空白的可打印 ASCII 字符串；非法或超长值会被丢弃并生成 UUID v7。
 
 采集日志在提交时快照 request ID、事件时间和源协程 ID。SDK 日志还会在发起请求时保存来源，因此 Promise 即使在另一协程完成，仍使用原请求的链路信息。
 
@@ -269,11 +269,14 @@ Hyperf 的 `OnWorkerExit`、`AllCoroutineServersClosed` 和 CLI `AfterExecute` �
 
 默认敏感字段包括 Authorization、Cookie、密码、Token、API Key 和 Secret 等常见名称。匹配不区分大小写，并递归处理 HTTP/SDK Header、URL query、JSON、表单和结构化字段。
 
+- URL userinfo 中的密码始终遮蔽并保留用户名；URL path 和 fragment 不做敏感值语义识别。
 - 显式 JSON 无法解析时采用 fail-closed，正文会被省略。
 - Redis `AUTH` 始终遮蔽；其他 Redis 命令和 SQL 不做字段语义猜测。
 - 可回绕流在读取后恢复位置；Hyperf `SwooleStream` 可以安全快照。
 - 其他不可回绕流不会被消费。
 - 文本超限时截断，结构化数据或流超限时省略。
+
+`payload.max_bytes=null` 会完全关闭上述单字段容量保护。对于无法预先确认长度的可读取流，这可能将完整内容读入 PHP Worker 内存并造成 OOM；生产环境应保留有限的正整数预算。
 
 保护动作统一写入 `payload_protection`：
 

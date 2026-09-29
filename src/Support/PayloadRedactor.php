@@ -108,7 +108,7 @@ final readonly class PayloadRedactor
     }
 
     /**
-     * 保持 URL 编码结构，仅替换 query 中命中的敏感参数。
+     * 保持 URL 编码结构，遮蔽 userinfo 密码并替换 query 中的敏感参数。
      *
      * @param array<string, mixed> $context
      * @param array<string, true> $fields
@@ -116,15 +116,43 @@ final readonly class PayloadRedactor
     private function redactUrl(array &$context, array $fields, string $replacement): void
     {
         $url = $context['request']['url'] ?? null;
-        if (! is_string($url) || $fields === [] || ! str_contains($url, '?')) {
+        if (! is_string($url)) {
             return;
         }
         $urlParts = explode('#', $url, 2);
         $beforeFragment = $urlParts[0];
         $fragment = $urlParts[1] ?? null;
-        [$base, $query] = array_pad(explode('?', $beforeFragment, 2), 2, '');
-        $context['request']['url'] = $base . '?' . $this->redactQuery($query, $fields, $replacement)
-            . ($fragment === null ? '' : '#' . $fragment);
+        $beforeFragment = $this->redactUserInfo($beforeFragment, $replacement);
+        if (str_contains($beforeFragment, '?')) {
+            [$base, $query] = array_pad(explode('?', $beforeFragment, 2), 2, '');
+            $beforeFragment = $base . '?' . $this->redactQuery($query, $fields, $replacement);
+        }
+        $context['request']['url'] = $beforeFragment . ($fragment === null ? '' : '#' . $fragment);
+    }
+
+    /** 只替换 authority 中的密码，保留用户名和其余 URI 结构。 */
+    private function redactUserInfo(string $url, string $replacement): string
+    {
+        $schemeEnd = strpos($url, '://');
+        if ($schemeEnd === false) {
+            return $url;
+        }
+        $authorityStart = $schemeEnd + 3;
+        $authorityLength = strcspn($url, '/?', $authorityStart);
+        $authority = substr($url, $authorityStart, $authorityLength);
+        $at = strrpos($authority, '@');
+        if ($at === false) {
+            return $url;
+        }
+        $userinfo = substr($authority, 0, $at);
+        $separator = strpos($userinfo, ':');
+        if ($separator === false) {
+            return $url;
+        }
+        $maskedUserInfo = substr($userinfo, 0, $separator) . ':' . rawurlencode($replacement);
+
+        return substr($url, 0, $authorityStart) . $maskedUserInfo . '@' . substr($authority, $at + 1)
+            . substr($url, $authorityStart + $authorityLength);
     }
 
     /**

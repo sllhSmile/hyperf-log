@@ -44,6 +44,35 @@ final class PayloadProcessorTest extends TestCase
         self::assertStringNotContainsString('secret', json_encode($result, JSON_THROW_ON_ERROR));
     }
 
+    public function testItRedactsUrlUserInfoPasswordWithoutChangingPathOrFragment(): void
+    {
+        $result = $this->processor()->process(Collector::Sdk, [
+            'request' => [
+                'url' => 'https://alice:secret@example.test/private/token?token=secret#password=secret',
+            ],
+        ]);
+
+        self::assertSame(
+            'https://alice:%2A%2A%2A%2A@example.test/private/token?token=%2A%2A%2A%2A#password=secret',
+            $result['request']['url'],
+        );
+    }
+
+    public function testItAlwaysRedactsUrlUserInfoPasswordWhenSensitiveFieldsAreEmpty(): void
+    {
+        $config = new LogConfig(new Config(['trace_log' => ['payload' => ['sensitive_fields' => []]]]));
+        $processor = new PayloadProcessor(new PayloadRedactor($config), new PayloadLimiter($config));
+
+        $result = $processor->process(Collector::Sdk, [
+            'request' => ['url' => 'https://alice:secret@example.test/path?token=secret'],
+        ]);
+
+        self::assertSame(
+            'https://alice:%2A%2A%2A%2A@example.test/path?token=secret',
+            $result['request']['url'],
+        );
+    }
+
     public function testBusinessFieldNamedHeadersKeepsItsJsonShape(): void
     {
         $result = $this->processor()->process(Collector::Api, [

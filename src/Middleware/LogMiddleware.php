@@ -29,11 +29,11 @@ final class LogMiddleware implements MiddlewareInterface
     public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface
     {
         $requestIdHeader = $this->config->requestIdHeader();
-        $inboundRequestId = trim($request->getHeaderLine($requestIdHeader));
+        $inboundRequestId = $request->getHeaderLine($requestIdHeader);
 
         // HTTP 入口始终开始一条完整的新 trace，避免 Worker/协程复用时继承旧状态。
         $trace = $this->requestContext->start($inboundRequestId !== '' ? $inboundRequestId : null);
-        if ($inboundRequestId === '') {
+        if ($inboundRequestId !== $trace->requestId) {
             $request = $request->withHeader($requestIdHeader, $trace->requestId);
         }
 
