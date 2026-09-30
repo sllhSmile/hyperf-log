@@ -21,7 +21,7 @@ final readonly class LogConfig
     public const DEFAULT_LOGGER_CHANNEL = null;
     public const DEFAULT_PAYLOAD_MAX_BYTES = 64 * 1024;
     public const DEFAULT_REDACTION_VALUE = '****';
-    public const DEFAULT_REQUEST_ID_HEADER = 'x-b3-traceid';
+    public const DEFAULT_REQUEST_ID_HEADER = 'x-request-id';
     public const DEFAULT_RESPONSE_ENABLED = false;
     public const DEFAULT_WRITE_MODE = WriteMode::SYNC;
     public const DEFAULT_API_RESPONSE_ENABLED = true;

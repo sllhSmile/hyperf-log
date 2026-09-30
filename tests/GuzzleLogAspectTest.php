@@ -32,7 +32,7 @@ final class GuzzleLogAspectTest extends TestCase
     {
         $seenRequestId = null;
         $stack = HandlerStack::create(static function (RequestInterface $request) use (&$seenRequestId) {
-            $seenRequestId = $request->getHeaderLine('x-b3-traceid');
+            $seenRequestId = $request->getHeaderLine('x-request-id');
 
             return Create::promiseFor(new Response());
         });

@@ -48,7 +48,7 @@ final class GuzzleMiddlewareInstallerTest extends TestCase
             Level::Info,
             Collector::Sdk,
             self::callback(static fn(array $value): bool =>
-                $value['request']['headers']['x-b3-traceid'] === ['trace-id']
+                $value['request']['headers']['x-request-id'] === ['trace-id']
                 && $value['response'] === ['status_code' => 200]
                 && isset($value['duration_ms'])),
             self::callback(static fn(LogOrigin $origin): bool => $origin->requestId === 'trace-id'),
@@ -64,7 +64,7 @@ final class GuzzleMiddlewareInstallerTest extends TestCase
         $seenOptions = $seen[1] ?? null;
         self::assertInstanceOf(RequestInterface::class, $seenRequest);
         self::assertIsArray($seenOptions);
-        self::assertSame('trace-id', $seenRequest->getHeaderLine('x-b3-traceid'));
+        self::assertSame('trace-id', $seenRequest->getHeaderLine('x-request-id'));
         self::assertSame(4, $seenOptions['timeout']);
         self::assertArrayNotHasKey('swoole', $seenOptions);
     }
@@ -184,7 +184,7 @@ final class GuzzleMiddlewareInstallerTest extends TestCase
     {
         $seenId = null;
         $stack = HandlerStack::create(static function (RequestInterface $request) use (&$seenId) {
-            $seenId = $request->getHeaderLine('x-b3-traceid');
+            $seenId = $request->getHeaderLine('x-request-id');
             return Create::promiseFor(new Response());
         });
         $logger = $this->createMock(CollectorLoggerInterface::class);

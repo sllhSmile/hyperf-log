@@ -18,7 +18,7 @@ use Sllhsmile\HyperfLog\Support\LogConfig;
  * ConfigProvider 将本中间件注册在 middlewares.http，因此它会处理 HTTP server 的
  * 全部路由。RPC 和 CLI 不会经过 PSR-15 HTTP 中间件：CLI 由 CommandTraceListener
  * 处理，RPC 需要在所使用 RPC 组件的 middleware 中调用 RequestContext::start()。
- * 入站 request-id 只做 trim 后透传，不在此处施加 UUID 等格式约束。
+ * 入站 request-id 由 RequestContext 校验长度和 Header 安全字符；无效值会替换为 UUID v7。
  */
 final class LogMiddleware implements MiddlewareInterface
 {

@@ -125,7 +125,7 @@ return [
 配置在 Worker 启动时读取和校验，修改后必须重启 Hyperf Worker：
 
 ```bash
-curl -i -H 'x-b3-traceid: demo-trace-001' http://127.0.0.1:9501/
+curl -i -H 'x-request-id: demo-trace-001' http://127.0.0.1:9501/
 tail -n 1 runtime/logs/trace.log
 ```
 
@@ -137,7 +137,7 @@ tail -n 1 runtime/logs/trace.log
 
 | 配置项 | 默认值 | 说明 |
 | --- | --- | --- |
-| `request_id_header` | `x-b3-traceid` | 入站、响应和 Guzzle 出站请求共用的 Header |
+| `request_id_header` | `x-request-id` | 入站、响应和 Guzzle 出站请求共用的通用关联 ID Header |
 | `logger_channel` | `null` | `null` 跟随 `logger.default`，也可指定已有 channel |
 | `write_mode` | `sync` | 仅接受 `sync` 或 `async` |
 | `async.max_buffer_bytes` | `8388608` | 每 Worker 异步队列的估算字节预算，最小 1024 |

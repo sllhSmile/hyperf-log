@@ -36,11 +36,11 @@ final class LogMiddlewareTest extends TestCase
             }
         };
 
-        $response = $middleware->process(new ServerRequest('GET', '/', ['x-b3-traceid' => 'upstream']), $handler);
+        $response = $middleware->process(new ServerRequest('GET', '/', ['x-request-id' => 'upstream']), $handler);
 
         self::assertSame('upstream', $context->id());
-        self::assertSame('upstream', $response->getHeaderLine('x-b3-traceid'));
-        self::assertSame('upstream', $handler->request?->getHeaderLine('x-b3-traceid'));
+        self::assertSame('upstream', $response->getHeaderLine('x-request-id'));
+        self::assertSame('upstream', $handler->request?->getHeaderLine('x-request-id'));
     }
 
     public function testItGeneratesAndInjectsAMissingId(): void
@@ -50,14 +50,14 @@ final class LogMiddlewareTest extends TestCase
         $handler = new class implements RequestHandlerInterface {
             public function handle(ServerRequestInterface $request): ResponseInterface
             {
-                return new Response(200, ['seen-id' => $request->getHeaderLine('x-b3-traceid')]);
+                return new Response(200, ['seen-id' => $request->getHeaderLine('x-request-id')]);
             }
         };
 
         $response = $middleware->process(new ServerRequest('GET', '/'), $handler);
         self::assertNotSame('', $context->id());
         self::assertSame($context->id(), $response->getHeaderLine('seen-id'));
-        self::assertSame($context->id(), $response->getHeaderLine('x-b3-traceid'));
+        self::assertSame($context->id(), $response->getHeaderLine('x-request-id'));
     }
 
     public function testItReplacesAnOversizedInboundIdEverywhere(): void
@@ -75,13 +75,13 @@ final class LogMiddlewareTest extends TestCase
         };
         $oversized = str_repeat('a', RequestContext::MAX_REQUEST_ID_BYTES + 1);
 
-        $response = $middleware->process(new ServerRequest('GET', '/', ['x-b3-traceid' => $oversized]), $handler);
+        $response = $middleware->process(new ServerRequest('GET', '/', ['x-request-id' => $oversized]), $handler);
         $requestId = $context->id();
 
         self::assertNotNull($requestId);
         self::assertNotSame($oversized, $requestId);
         self::assertMatchesRegularExpression('/^[0-9a-f-]{36}$/', $requestId);
-        self::assertSame($requestId, $handler->request?->getHeaderLine('x-b3-traceid'));
-        self::assertSame($requestId, $response->getHeaderLine('x-b3-traceid'));
+        self::assertSame($requestId, $handler->request?->getHeaderLine('x-request-id'));
+        self::assertSame($requestId, $response->getHeaderLine('x-request-id'));
     }
 }

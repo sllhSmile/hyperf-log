@@ -55,7 +55,7 @@ final class LogConfigTest extends TestCase
         self::assertTrue($config->responseEnabled(Collector::Api));
         self::assertFalse($config->responseEnabled(Collector::Sdk));
         self::assertNull($config->loggerChannel());
-        self::assertSame('x-b3-traceid', $config->requestIdHeader());
+        self::assertSame('x-request-id', $config->requestIdHeader());
         self::assertSame(WriteMode::SYNC, $config->writeMode());
         self::assertSame(8 * 1024 * 1024, $config->asyncMaxBufferBytes());
     }
@@ -108,6 +108,13 @@ final class LogConfigTest extends TestCase
     public static function invalidRequestIdHeaders(): array
     {
         return [[''], ['x trace id'], ["x-trace\r\nid"], [false], [null]];
+    }
+
+    public function testRequestIdHeaderCanBeOverriddenAndIsNormalized(): void
+    {
+        $config = new LogConfig(new Config(['trace_log' => ['request_id_header' => 'X-Correlation-ID']]));
+
+        self::assertSame('x-correlation-id', $config->requestIdHeader());
     }
 
     public function testInvalidPayloadConfigurationFailsFast(): void
